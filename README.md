@@ -19,10 +19,10 @@ Se juega de principio a fin en lo probado: vídeos, título, menús, partida, co
 el mapa. Pantalla ancha (21:9 y más), resolución interna hasta 8K, HDR, hasta 240 FPS, AMD FSR 4 / 3.1 / 2.3 con
 generación de fotogramas, texturas HD y menús en español.
 
-| Rama | Port | Versión | Cambios |
-| --- | --- | --- | --- |
-| `main` | PC: Windows 10 u 11 de 64 bits, Vulkan 1.3 | 0.51.0-beta | [`VERSIONES.txt`](https://github.com/ElKiro1311/smrpg-recompiled/blob/main/VERSIONES.txt) |
-| [`android`](https://github.com/ElKiro1311/smrpg-recompiled/tree/android) | Android 13 o más nuevo (arm64), Vulkan 1.3. Alfa: por ahora solo compilándolo | 0.9.0-alfa | `VERSIONES-ANDROID.txt`, en esa rama |
+| Port | Versión | Repositorio y releases |
+| --- | --- | --- |
+| PC: Windows 10 u 11 de 64 bits, Vulkan 1.3 | 0.51.0-beta | este; cambios: [`VERSIONES.txt`](VERSIONES.txt) |
+| Android 13 o más nuevo (arm64), Vulkan 1.3. Alfa | 0.9.1-alpha | [smrpg-recompiled-android](https://github.com/ElKiro1311/smrpg-recompiled-android) |
 
 ## Jugar en Windows
 
@@ -44,25 +44,15 @@ extraído va en `extracted/` (o un enlace a esa carpeta); `make gen` traduce su 
 Android, JDK…) van en un `local.env` propio, que git no sube: ver [`local.env.ejemplo`](local.env.ejemplo). El estado
 técnico y cómo se prueba: [`ESTADO.md`](ESTADO.md).
 
-Solo Windows (`main`) y Android (rama `android`). Lo de macOS y Linux, `make dist`/`app`/`dmg`/`appimage`, el
+Solo Windows (Android, en su repositorio). Lo de macOS y Linux, `make dist`/`app`/`dmg`/`appimage`, el
 aleatorizador de Link's Awakening (`tools/rando`, `third_party/LAS-Randomizer`) y `tools/shot.sh`, `frames.sh` y
 `run.sh` son de LASRecomp y aquí no se usan. El port parte de LASRecomp 579fdad: lo que añade se ve comparando con ese
 commit de LASRecomp.
 
-## Android (rama `android`, alfa)
+## Android
 
-No hay APK publicado: por ahora se compila desde Windows, en la rama `android` y con MSYS2 UCRT64. Hace falta el SDK
-de Android con `ndk;29.0.14206865`, `build-tools;36.0.0`, `platforms;android-36` y `cmake;4.1.2`, y un JDK 17 o más
-nuevo, con sus rutas en `local.env` (ver `local.env.ejemplo`). Con tu juego extraído en `extracted/`:
-
-1. `tools/android/deps.sh arm64-v8a`: SDL3, FFmpeg (LGPL), Opus y shaderc, en `../deps/arm64-v8a`;
-2. `make gen PLATFORM=android ABI=arm64-v8a` y `make -j8 PLATFORM=android ABI=arm64-v8a`: `libmain.so` y el código del
-   juego, `lasgame.so`, en `build/android-arm64-v8a/`;
-3. `tools/android/apk.sh arm64-v8a`: el APK, en `build/apk/`; se instala con `adb install`;
-4. en el aparato, `Android/data/org.smrpgrecomp.android/files/extracted/` lleva `exefs/`, `romfs/` y `lasgame.so` (con
-   su `.id`; el `.cpu` solo lo lleva el de x86_64, el del emulador).
-
-Las versiones de Android: `VERSIONES-ANDROID.txt`, en esa rama.
+El port de Android tiene su propio repositorio, con sus releases y su APK:
+[smrpg-recompiled-android](https://github.com/ElKiro1311/smrpg-recompiled-android).
 
 ## Fallos y sugerencias
 
