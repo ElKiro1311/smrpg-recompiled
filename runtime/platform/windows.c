@@ -481,11 +481,11 @@ static void log_to_file_without_console(void) {
     ReleaseMutex(g_log_mutex);
 }
 
-// The recompiled game code is built for x86-64-v3 (Makefile GENARCH: AVX2, FMA, BMI2): say so instead of crashing
-// with an illegal instruction on an older CPU.
-// (SMRPG) El programa en sí es x86-64 sin más (sus opciones no piden otra CPU); lo que pide AVX2 es el código del juego
-// compilado con -march=x86-64-v3, y el instalador lo compila para la CPU que haya (x86-64-v3, -v2 o x86-64:
-// lasgame.dll.cpu): runtime/gamelib.c cpu_runs comprueba la de cada biblioteca al cargarla (sin .cpu, `make`: v3).
+// The recompiled game code is built for x86-64-v3 (Makefile GENARCH: AVX2, FMA, BMI2): say so instead of crashing with
+// an illegal instruction on an older CPU.
+// (SMRPG) The program itself is plain x86-64 (its flags ask for no other CPU); what needs AVX2 is the game code
+// compiled with -march=x86-64-v3, and the installer compiles it for whatever CPU there is (x86-64-v3, -v2 or x86-64:
+// lasgame.dll.cpu): runtime/gamelib.c cpu_runs checks each library's when loading it (no .cpu, `make`: v3).
 static void require_cpu(void) {}
 
 // Fatal error (rt_fatal_trace): what happened in plain words (runtime/crash_explain.c) in a message box, when there is
@@ -570,7 +570,7 @@ void plat_system_info(PlatSysInfo *si) {
 }
 
 void plat_init(void) {
-    {   // (SMRPG: «Reiniciar el juego», plat_spawn_self) la copia de antes termina primero: sus cachés y ajustes, escritos
+    {   // (SMRPG: "Restart the game", plat_spawn_self) the previous copy ends first: its caches and settings, written
         char pid[24];
         if (GetEnvironmentVariableA("LARECOMP_WAIT_PID", pid, sizeof pid) && pid[0]) {
             HANDLE h = OpenProcess(SYNCHRONIZE, FALSE, (DWORD)strtoul(pid, NULL, 10));
@@ -656,7 +656,7 @@ bool plat_spawn_self(void) {
     PROCESS_INFORMATION pi;
     fflush(stdout);
     fflush(stderr);
-    char pid[24];  // (la nueva espera a que esta termine antes de empezar: plat_init)
+    char pid[24];  // (the new one waits for this one to end before starting: plat_init)
     snprintf(pid, sizeof pid, "%lu", (unsigned long)GetCurrentProcessId());
     SetEnvironmentVariableA("LARECOMP_WAIT_PID", pid);
     BOOL ok = CreateProcessW(NULL, GetCommandLineW(), NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi);
@@ -684,9 +684,9 @@ bool plat_proc_stats(PlatProcStats *s) {
     return true;
 }
 
-// Los contadores de rendimiento de Windows (PDH): \GPU Engine(pid_<este>_*)\Utilization Percentage, una instancia por
-// motor de la GPU que usa el proceso (3D, cómputo, copia...). Medido el 11-16 con la generación de fotogramas de AMD:
-// sin ella coincide con el temporizador de GPU del render (42 %) y con ella la incluye (67 %).
+// The Windows performance counters (PDH): \GPU Engine(pid_<this>_*)\Utilization Percentage, one instance per GPU engine
+// the process uses (3D, compute, copy...). Measured on 11-16 with AMD's frame generation: without it they match the
+// renderer's GPU timer (42%) and with it they include it (67%).
 static PDH_HQUERY g_pdh_q;
 static PDH_HCOUNTER g_pdh_c;
 static int g_pdh = -1;
@@ -700,7 +700,7 @@ bool plat_gpu_usage(double *pct) {
             PdhCloseQuery(g_pdh_q);
             return false;
         }
-        PdhCollectQueryData(g_pdh_q);  // (un porcentaje necesita dos muestras)
+        PdhCollectQueryData(g_pdh_q);  // (a percentage needs two samples)
         g_pdh = 1;
         return false;
     }
@@ -713,7 +713,7 @@ bool plat_gpu_usage(double *pct) {
         free(it);
         return false;
     }
-    double kind[4] = {0};  // 3D, cómputo, copia, otros: la suma de los motores de cada tipo
+    double kind[4] = {0};  // 3D, compute, copy, others: the sum of the engines of each type
     for (DWORD i = 0; i < count; i++) {
         if (it[i].FmtValue.CStatus != PDH_CSTATUS_VALID_DATA && it[i].FmtValue.CStatus != PDH_CSTATUS_NEW_DATA) continue;
         wchar_t low[256];

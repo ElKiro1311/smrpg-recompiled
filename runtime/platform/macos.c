@@ -292,7 +292,7 @@ static int rm_entry(const char *path, const struct stat *sb, int flag, struct FT
 bool plat_remove_tree(const char *dir) { return nftw(dir, rm_entry, 16, FTW_DEPTH | FTW_PHYS) == 0; }
 bool plat_onedrive_synced(const char *dir) { (void)dir; return false; }
 
-// (SMRPG: solo Windows) runtime/platform.h
+// (SMRPG: Windows only) runtime/platform.h
 bool plat_spawn_self(void) { return false; }
 bool plat_proc_stats(PlatProcStats *s) { memset(s, 0, sizeof *s); return false; }
 bool plat_gpu_usage(double *pct) { *pct = 0; return false; }

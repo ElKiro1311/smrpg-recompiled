@@ -1,7 +1,7 @@
 #pragma once
-// (SMRPG) El nombre de la aplicación en lo que ve quien juega: la ventana, los menús, los avisos y los errores.
+// (SMRPG) The application's name wherever the player sees it: the window, the menus, the notices and the errors.
 #define APP_NAME "SMRPG Recomp"
-// (SMRPG) La versión de SMRPG Recomp: x.y.z-alfa / -beta (Semantic Versioning: VERSIONES.txt). Se ve en el menú
-// (Salir) y en el registro. La de la base (LARECOMP_VERSION, runtime/ui/launcher.mm) es la etiqueta de las cachés de
-// shaders: no cambia con esta (cambiarla vaciaría las cachés de quien juega).
-#define APP_VERSION "0.51.0-beta"
+// (SMRPG) SMRPG Recomp's version: x.y.z-alpha / -beta (Semantic Versioning: CHANGELOG.txt). Shown in the menu (Quit) and
+// in the log. The base's version (LARECOMP_VERSION, runtime/ui/launcher.mm) is the tag of the shader caches: it does
+// not change along with this one (changing it would empty the player's caches).
+#define APP_VERSION "0.52.0-beta"

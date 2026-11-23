@@ -43,7 +43,7 @@ Settings g_settings = {
     .upscaler = UPSCALE_SHARP,  // (MetalFX on macOS, AMD FSR 1 on Windows)
     .upscaler_auto = true,
     .res_auto = true,
-    .supersample = 1,  // (SMRPG: sin supersampling, sin nitidez extra; anisótropo 16x: barato y más nítido en ángulo)
+    .supersample = 1,  // (SMRPG: no supersampling, no extra sharpness; 16x anisotropic: cheap, and sharper at an angle)
     .sharpness = 0,
     .aniso = 16,
     .fps_limit = 60,
@@ -55,7 +55,7 @@ Settings g_settings = {
     .hdr_boost = 5,
     .true_black = true,
     .movie_fit = 1,
-    .lsfg_flow = 75,  // (SMRPG: la de Lossless Scaling por defecto; lsfg_perf, al modo calidad en PC)
+    .lsfg_flow = 75,  // (SMRPG: Lossless Scaling's default; lsfg_perf, quality mode on PC)
     .livesplit_host = "localhost:16834",
 #ifndef __APPLE__
     .bg_input = true,  // (as before the setting; on macOS it needs Input Monitoring permission, so Off there)
@@ -79,7 +79,7 @@ __declspec(dllimport) int __stdcall GetUserDefaultLocaleName(wchar_t *name, int 
 #endif
 static const char *host_language(void) {
 #if defined(_WIN32)
-    // (SMRPG) Windows: el idioma de Windows (es-ES, es-MX, fr-FR...): en Windows no hay variables de idioma
+    // (SMRPG) Windows: the Windows language (es-ES, es-MX, fr-FR...): there are no language variables on Windows
     static char winloc[16];
     if (!winloc[0]) {
         wchar_t w[85] = {0};
@@ -133,13 +133,13 @@ const char *settings_language_name(void) {
     return "English";
 }
 
-int settings_aniso(void) { return g_settings.aniso; }  // (SMRPG: el renderizador, textures.c vk_sampler)
+int settings_aniso(void) { return g_settings.aniso; }  // (SMRPG: the renderer, textures.c vk_sampler)
 int settings_tex_detail(void) { return g_settings.tex_detail; }
 int settings_shader_wait(void) { return g_settings.shader_wait; }
 int settings_tex_pack(void) { return g_settings.tex_pack; }  // (SMRPG: vulkan/texpack.c)
 int settings_fsr_version(void) { return g_settings.fsr_version; }  // (SMRPG: vulkan/vk_fsr.cpp)
 int settings_tex_dump(void) { return g_settings.tex_dump; }
-int settings_fps_limit(void) { return g_settings.fps_limit; }  // (SMRPG: el hilo del vsync, hle/vi.c)
+int settings_fps_limit(void) { return g_settings.fps_limit; }  // (SMRPG: the vsync thread, hle/vi.c)
 
 int g_default_upscaler = UPSCALE_SHARP;
 int g_default_res_mode = RES_MATCH;
@@ -167,8 +167,8 @@ void settings_resolve_defaults(bool integrated) {
         g_settings.antialias == AA_SMAA ? "smaa" : g_settings.antialias == AA_FSR ? "fsr" : "off");
 }
 
-// (SMRPG) Los valores por defecto (el inicializador de arriba, antes de leer larecomp.ini: «Restablecer» del menú) y los
-// de este arranque (tras leerlo: lo que solo se aplica al volver a abrir el juego, el idioma, se compara con ellos)
+// (SMRPG) The defaults (the initializer above, before reading larecomp.ini: the menu's "Reset") and the values of this
+// launch (after reading it: what only applies on reopening the game, the language, is compared against them)
 Settings g_settings_defaults, g_settings_boot;
 static void settings_load_file(void);
 void settings_load(void) {
@@ -180,8 +180,8 @@ void settings_load(void) {
     g_settings_boot = g_settings;
 }
 
-// (SMRPG) Los ajustes de Vídeo (no el idioma) a sus valores por defecto; la resolución interna y el escalado, a los de
-// esta tarjeta (settings_resolve_defaults)
+// (SMRPG) The Video settings (not the language) back to their defaults; the internal resolution and the upscaling, to
+// the ones for this GPU (settings_resolve_defaults)
 void settings_reset_video(void) {
     const Settings *d = &g_settings_defaults;
     Settings *s = &g_settings;
@@ -206,7 +206,7 @@ static void settings_load_file(void) {
     if (!f) return;
     char line[256];
     bool tip_key = false, aspect_key = false;
-    bool window_mode_read = false;  // (SMRPG: window_mode manda sobre el fullscreen de antes)
+    bool window_mode_read = false;  // (SMRPG: window_mode overrides the old fullscreen)
     while (fgets(line, sizeof line, f)) {
         line[strcspn(line, "\r\n")] = 0;
         char key[64];
@@ -219,7 +219,7 @@ static void settings_load_file(void) {
         }
         if (fields != 2) continue;
         if (!strcmp(key, "aspect")) g_settings.aspect = !strcmp(val, "original") ? ASPECT_ORIGINAL : ASPECT_UNLOCKED;
-        else if (!strcmp(key, "fullscreen")) {  // (de antes de window_mode: la pantalla completa de SDL era sin bordes)
+        else if (!strcmp(key, "fullscreen")) {  // (from before window_mode: SDL's fullscreen was borderless)
             g_settings.fullscreen = atoi(val) != 0;
             if (!window_mode_read) g_settings.window_mode = g_settings.fullscreen ? WIN_BORDERLESS : WIN_WINDOW;
         } else if (!strcmp(key, "window_mode")) {
@@ -272,7 +272,7 @@ static void settings_load_file(void) {
         else if (!strcmp(key, "lsfg")) { int n = atoi(val); g_settings.lsfg = n >= 2 && n <= 4 ? n : 0; }
         else if (!strcmp(key, "lsfg_flow")) { int n = atoi(val); g_settings.lsfg_flow = n < 25 ? 25 : n > 100 ? 100 : n; }
         else if (!strcmp(key, "lsfg_perf")) g_settings.lsfg_perf = atoi(val) != 0;
-        else if (!strcmp(key, "aniso")) {  // (SMRPG) 0 = el del juego
+        else if (!strcmp(key, "aniso")) {  // (SMRPG) 0 = the game's own
             int n = atoi(val);
             g_settings.aniso = n >= 16 ? 16 : n >= 8 ? 8 : n >= 4 ? 4 : n >= 2 ? 2 : 0;
         }

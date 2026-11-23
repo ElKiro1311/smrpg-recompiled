@@ -471,10 +471,10 @@ static const char *builtin_src(const char *name, int *stage) {
                "  o = vec4((lobe * (b + d + f + h) + e) / (4.0 * lobe + 1.0), 1.0);\n"
                "}\n";
     }
-    // (SMRPG) Reducción con filtro de caja (supersampling, o una imagen interna mayor que la ventana): la huella de cada
-    // píxel de salida en la imagen (a.xy: tamaño del contenido, a.zw: el de la salida) con b.x x b.y muestras bilineales
-    // repartidas por ella (b.zw: tamaño de la textura), promediadas en espacio lineal (la imagen va codificada en gamma).
-    // Con escala entera (x4, x16) cada muestra cae en el centro de un texel: media exacta.
+    // (SMRPG) Box-filter downscale (supersampling, or an internal image larger than the window): each output pixel's
+    // footprint in the image (a.xy: contents size, a.zw: output size) with b.x x b.y bilinear samples spread over it
+    // (b.zw: texture size), averaged in linear space (the image is gamma-encoded). With an integer scale (x4, x16) each
+    // sample lands on the center of a texel: an exact average.
     if (!strcmp(name, "downsample.frag")) {
         *stage = STAGE_FRAGMENT;
         return "#version 450\n"
@@ -494,9 +494,9 @@ static const char *builtin_src(const char *name, int *stage) {
                "  o = vec4(pow(acc / float(nx * ny), vec3(1.0 / 2.2)), 1.0);\n"
                "}\n";
     }
-    // (SMRPG) HDR10: la ventana SDR (gamma sRGB) a PQ (ST 2084) en Rec.2020. El blanco SDR va al «blanco de papel»
-    // (a.x nits); con a.z > 0 las luces (lo más brillante de la imagen, por encima de ~60 %) se realzan hacia el pico
-    // (a.y nits) con una curva suave, para que el HDR se note sin cambiar los tonos medios.
+    // (SMRPG) HDR10: the SDR window (sRGB gamma) to PQ (ST 2084) in Rec.2020. SDR white goes to "paper white" (a.x
+    // nits); with a.z > 0 the highlights (the brightest part of the image, above ~60%) are boosted toward the peak (a.y
+    // nits) with a smooth curve, so that HDR is noticeable without changing the midtones.
     if (!strcmp(name, "hdr10.frag")) {
         *stage = STAGE_FRAGMENT;
         return "#version 450\n"
@@ -519,9 +519,9 @@ static const char *builtin_src(const char *name, int *stage) {
                "  o = vec4(pq(max(to2020 * n709, vec3(0.0))), 1.0);\n"
                "}\n";
     }
-    // (SMRPG) «Negro puro» (exec.c lut_black_fix): la LUT de etalonaje de URP (t = su copia) con el negro a 0. Su texel
-    // (0, 0) es lo que sale para el negro, n: (c - m) / (1 - m) con m = n entero hasta 2/255 (el velo del juego es 1/255)
-    // y cada vez menos hasta 6/255, sin saltos; un negro más alto es a propósito y se deja.
+    // (SMRPG) "True black" (exec.c lut_black_fix): URP's color grading LUT (t = its copy) with black at 0. Its texel
+    // (0, 0) is what comes out for black, n: (c - m) / (1 - m) with m = all of n up to 2/255 (the game's veil is 1/255)
+    // and less and less up to 6/255, with no jumps; a higher black is deliberate and is left alone.
     if (!strcmp(name, "lutblack.frag")) {
         *stage = STAGE_FRAGMENT;
         return "#version 450\n"

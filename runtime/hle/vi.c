@@ -10,18 +10,18 @@ static KEvent *vsync_event;
 uint32_t vi_vsync_handle(void) { return vsync_r; }
 volatile uint64_t g_vsync_count;  // vsyncs signalled so far (runtime/hle/framepace.c, runtime/nvn/pace.c)
 volatile uint64_t g_vsync_ns;     // plat_now_ns() of the latest (stored after the count: count >= the vsync it's from)
-volatile uint64_t g_vsync_period_ns;  // (SMRPG) el periodo de ahora (0 antes del primero): el tiempo de imagen de AMD FSR
+volatile uint64_t g_vsync_period_ns;  // (SMRPG) the current period (0 before the first one): AMD FSR's frame time
 uint64_t g_native_window;
 
-// (SMRPG) el periodo del vsync: 60 Hz como la consola, o el «Límite de FPS» de los ajustes (Unity marca su ritmo con
-// este evento: más vsyncs por segundo, más imágenes por segundo). LARECOMP_VSYNC_HZ lo fija para pruebas. En combate,
-// 60 Hz solo con el modo de 30 (LARECOMP_BATTLE_FPS=30, dos pasos por imagen); con el de 60, el «Límite de FPS»:
-// los pasos de su lógica los reparte BattleManager.update por tiempo real (hle/battle_rate.c).
+// (SMRPG) the vsync period: 60 Hz like the console, or the "FPS limit" from the settings (Unity paces itself with this
+// event: more vsyncs per second, more frames per second). LARECOMP_VSYNC_HZ fixes it for testing. In battle, 60 Hz only
+// in 30 mode (LARECOMP_BATTLE_FPS=30, two steps per frame); in 60 mode, the "FPS limit": BattleManager.update paces its
+// logic steps by real time (hle/battle_rate.c).
 static uint64_t vsync_period_ns(void) {
     static int env = -1;
     if (env < 0) env = getenv("LARECOMP_VSYNC_HZ") ? atoi(getenv("LARECOMP_VSYNC_HZ")) : 0;
     extern int settings_fps_limit(void);
-    extern int rt_battle_vsync_hz(int hz);  // (SMRPG: en combate, 60 Hz solo con el modo de 30; hle/battle_rate.c)
+    extern int rt_battle_vsync_hz(int hz);  // (SMRPG: in battle, 60 Hz only in 30 mode; hle/battle_rate.c)
     int hz = env > 0 ? env : settings_fps_limit();
     hz = rt_battle_vsync_hz(hz);
     if (hz < 20 || hz > 1000) hz = 60;
@@ -37,11 +37,11 @@ static void *vsync_thread(void *arg) {
     uint64_t next = plat_now_ns();
     for (;;) {
         uint64_t p2 = vsync_period_ns();
-        if (p2 != period) {  // (cambiado desde el menú, o al entrar en un combate o salir de él)
+        if (p2 != period) {  // (changed from the menu, or on entering or leaving a battle)
             period = p2;
             g_vsync_period_ns = period;
             plat_thread_realtime(period);
-            LOG("[vi] vsync a %.1f Hz\n", 1e9 / (double)period);
+            LOG("[vi] vsync at %.1f Hz\n", 1e9 / (double)period);
         }
         next += period;
         plat_sleep_until_ns(next);

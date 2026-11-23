@@ -76,19 +76,19 @@ typedef struct {
 void plat_system_info(PlatSysInfo *si);
 bool plat_exe_path(char *buf, size_t size);
 void plat_exec(char *const argv[]);  // replace the process (NULL = same command line); returns only on failure
-// (SMRPG) Otra copia del programa con la misma línea de órdenes, sin esperarla (el menú: «Reiniciar el juego» la lanza
-// y cierra esta). false si no se pudo (o en este sistema no se hace).
+// (SMRPG) Another copy of the program with the same command line, without waiting for it (the menu: "Restart the game"
+// launches it and closes this one). false if it failed (or this system does not do it).
 bool plat_spawn_self(void);
-// (SMRPG) Lo que gasta este proceso, para el medidor del menú (runtime/ui/perf_meter.c): tiempo de CPU (usuario +
-// sistema, todos sus hilos), memoria física en uso (working set) y la del equipo, y bytes leídos / escritos (E/S de
-// archivos y dispositivos). false si este sistema no lo da.
+// (SMRPG) What this process uses, for the menu's meter (runtime/ui/perf_meter.c): CPU time (user + system, all its
+// threads), physical memory in use (working set) and the machine's, and bytes read / written (file and device I/O).
+// false if this system does not provide it.
 typedef struct {
     uint64_t cpu_ns, ram_used, ram_total, io_read, io_write;
-    int ncpu;  // procesadores lógicos
+    int ncpu;  // logical processors
 } PlatProcStats;
 bool plat_proc_stats(PlatProcStats *s);
-// (SMRPG) El uso de la GPU por este proceso, en % (como el Administrador de tareas: el motor más ocupado de los suyos,
-// con todo lo que hace, también la generación de fotogramas de AMD). La primera llamada solo empieza a medir (false).
+// (SMRPG) This process's GPU usage, in % (like Task Manager: the busiest of its engines, with everything it does, AMD's
+// frame generation included). The first call only starts measuring (false).
 bool plat_gpu_usage(double *pct);
 #if defined(_WIN32) || defined(__linux__)
 void plat_terminate(void);  // end the process now, skipping DLL teardown (exit status 0)

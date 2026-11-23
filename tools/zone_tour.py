@@ -1,12 +1,12 @@
-# tools/recorrer_zonas.py: prueba zonas del juego sin jugar hasta ellas. El guardado de SMRPG es JSON en UTF-16 sin
-# firma: su planta de reaparición (_respawn_floor_name, el nombre de la escena: d01f1b el castillo de Bowser, d02out
-# Mushroom Way...) decide dónde aparece Mario al cargar. Para cada escena pedida, copia el guardado de base de una
-# carpeta de datos aislada, cambia la planta, arranca tools/probar.sh (entrada programada: saltar el vídeo, el título,
-# el menú y cargar el autoguardado) y guarda las capturas en build/zonas/<escena>_<fotograma>.png y una hoja de
-# contacto build/zonas/hoja.png. Los registros quedan en build/zonas/<escena>.log.
-# Uso (MSYS2, en la carpeta del repositorio):
-#   python tools/recorrer_zonas.py <carpeta de datos aislada> <guardado de base> escena [escena ...]
-# Ejemplo: python tools/recorrer_zonas.py <carpeta aislada> <carpeta aislada>/<guardado de base> d02out d04b1
+# tools/zone_tour.py: tests areas of the game without playing up to them. SMRPG's save is unsigned UTF-16 JSON: its
+# respawn floor (_respawn_floor_name, the scene's name: d01f1b Bowser's Keep, d02out Mushroom Way...) decides where Mario
+# appears when it is loaded. For each scene asked for, it copies the base save of a separate data folder, changes the
+# floor, runs tools/run_test.sh (scripted input: skip the movie, the title screen, the menu and load the autosave) and keeps
+# the screenshots in build/zones/<scene>_<frame>.png and a contact sheet, build/zones/sheet.png. The logs stay in
+# build/zones/<scene>.log.
+# Usage (MSYS2, in the repository's folder):
+#   python tools/zone_tour.py <separate data folder> <base save> scene [scene ...]
+# Example: python tools/zone_tour.py <separate folder> <separate folder>/<base save> d02out d04b1
 import json
 import os
 import re
@@ -29,7 +29,7 @@ def set_floor(src, dst, floor):
     open(dst, 'wb').write(out.encode('utf-16-le') + b'\x00\x00' * pad)
 
 
-def wait_closed(secs=30):  # (la prueba anterior tarda en cerrarse: probar.sh no arranca con el juego abierto)
+def wait_closed(secs=30):  # (the previous run takes a while to close: run_test.sh does not start with the game open)
     import time
     for _ in range(secs * 2):
         r = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq smrpg-recomp.exe'], capture_output=True, text=True)
@@ -41,11 +41,11 @@ def wait_closed(secs=30):  # (la prueba anterior tarda en cerrarse: probar.sh no
 def main():
     root, base = sys.argv[1], sys.argv[2]
     scenes = sys.argv[3:]
-    if not scenes:  # (SMRPG: la lista por archivo: por la linea de orden se parten las rutas al sh)
-        scenes = open(os.environ.get('ZONAS_FILE', 'build/zonas_lista.txt')).read().split()
+    if not scenes:  # (SMRPG: the list from a file: on the command line the paths get split by sh)
+        scenes = open(os.environ.get('ZONES_FILE', 'build/zones_list.txt')).read().split()
     root_win = subprocess.run(['cygpath', '-w', os.path.abspath(root)], capture_output=True, text=True).stdout.strip()
-    os.makedirs('build/zonas', exist_ok=True)
-    done_path = os.environ.get('HECHAS_FILE', 'build/zonas_hechas.txt')  # (SMRPG: reanudable; por instancia en el barrido a 3)
+    os.makedirs('build/zones', exist_ok=True)
+    done_path = os.environ.get('DONE_FILE', 'build/zones_done.txt')  # (SMRPG: resumable; one per instance in the 3-way sweep)
     try:
         done = set(open(done_path).read().split())
     except OSError:
@@ -54,20 +54,20 @@ def main():
     shots = []
     for sc in scenes:
         if sc in done:
-            print(f'{sc}: ya hecha, salto', flush=True)
+            print(f'{sc}: already done, skipping', flush=True)
             continue
         save_dir = os.path.join(root, 'save', 'save_0')
         shutil.rmtree(os.path.join(root, 'save'), ignore_errors=True)
         shutil.copytree(base, os.path.join(root, 'save'))
         set_floor(os.path.join(base, 'save_0', 'SMR_Save_Ver0011000'), os.path.join(save_dir, 'SMR_Save_Ver0011000'), sc)
-        frames = os.path.join(root, 'build', 'frames')  # (las capturas caen en la carpeta de datos, no en el repo)
+        frames = os.path.join(root, 'build', 'frames')  # (the screenshots land in the data folder, not in the repository)
         for f in os.listdir(frames) if os.path.isdir(frames) else []:
             os.remove(os.path.join(frames, f))
-        log = f'build/zonas/{sc}.log'
+        log = f'build/zones/{sc}.log'
         env_args = [f'LARECOMP_DATA_ROOT={root_win}', 'LARECOMP_HIDDEN=1', 'LARECOMP_NO_AUDIO=1', f'LARECOMP_INPUT={INPUT}',
                     'LARECOMP_SHOT_AT=' + ','.join(str(x) for x in FRAMES)]
         wait_closed()
-        r = subprocess.run(['sh', 'tools/probar.sh', '75', log] + env_args, capture_output=True, text=True)
+        r = subprocess.run(['sh', 'tools/run_test.sh', '75', log] + env_args, capture_output=True, text=True)
         crash = ''
         try:
             txt = open(log, 'rb').read().decode('utf-8', 'replace')
@@ -81,15 +81,15 @@ def main():
         for fr in FRAMES:
             p = os.path.join(frames, f'frame_{fr:05d}.png')
             if os.path.exists(p):
-                q = f'build/zonas/{sc}_{fr}.png'
+                q = f'build/zones/{sc}_{fr}.png'
                 shutil.copy(p, q)
                 got.append(q)
                 shots.append((f'{sc} {fr}', q))
-        print(f'{sc}: {len(got)} capturas, saltados {skipped} {crash} {r.stdout.strip()[-60:]}', flush=True)
+        print(f'{sc}: {len(got)} screenshots, skipped {skipped} {crash} {r.stdout.strip()[-60:]}', flush=True)
         done_f.write(sc + '\n')
         done_f.flush()
     if len(shots) > 80:
-        print(f'(hoja omitida: {len(shots)} capturas)')
+        print(f'(sheet left out: {len(shots)} screenshots)')
         return
     try:
         from PIL import Image, ImageDraw
@@ -102,7 +102,7 @@ def main():
             x, y = (i % cols) * 400, (i // cols) * 225
             sheet.paste(im, (x, y))
             d.text((x + 4, y + 4), name, fill=(255, 255, 0))
-        sheet.save('build/zonas/hoja.png')
+        sheet.save('build/zones/sheet.png')
     except ImportError:
         pass
 

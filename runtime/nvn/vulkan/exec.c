@@ -88,8 +88,8 @@ static void ss_forget(void);
 static uint64_t submit_seq;  // last handed to the recorder (= submitted, with the recorder off)
 static pthread_mutex_t seq_lock = PTHREAD_MUTEX_INITIALIZER;
 static bool in_pass;
-static NvnTexture *pass_color0;  // (SMRPG) el destino de color 0 de la pasada en curso: el que guarda el volcado
-static uint64_t pass_last_fs;    // (SMRPG) el sombreador de fragmentos del último dibujo grabado en ella (0: ninguno)
+static NvnTexture *pass_color0;  // (SMRPG) color target 0 of the current pass: the one the dump saves
+static uint64_t pass_last_fs;    // (SMRPG) the fragment shader of the last draw recorded in it (0: none)
 static int passes_in_sub;  // render passes in the submission being recorded (LARECOMP_CHUNK_PASSES, begin_pass)
 
 // CPU / GPU overlap (as renderer.m: the Metal backend, metal-overlap). The game's frame loop submits a frame, presents
@@ -925,7 +925,7 @@ static struct {
     int nstream;
     Range vbuf[16], ubuf[6][18], sbuf[6][16];
     uint64_t tex[6][32], img[6][8];
-    uint64_t septex[6][128], sepsamp[6][128];  // (SMRPG: texturas y samplers separados, cmdbuf.c)
+    uint64_t septex[6][128], sepsamp[6][128];  // (SMRPG: separate textures and samplers, cmdbuf.c)
     NvnDescPool *tpool, *spool;
     float viewport[16][4];
     int32_t scissor[16][4];
@@ -1313,7 +1313,7 @@ static inline bool ss_need(uint32_t bit, bool same) {
 }
 
 static void vk_end_pass_at(int line);
-static void lut_black_fix(NvnTexture *t, uint64_t fs);  // (SMRPG: «Negro puro», más abajo con las pasadas propias)
+static void lut_black_fix(NvnTexture *t, uint64_t fs);  // (SMRPG: "True black", further down with our own passes)
 void vk_end_pass(void) { vk_end_pass_at(0); }
 #define vk_end_pass() vk_end_pass_at(__LINE__)
 static void vk_end_pass_at(int line) {
@@ -1321,15 +1321,15 @@ static void vk_end_pass_at(int line) {
     if (prof && line < 4096) prof_end_line[line]++;
     rec_CmdEndRendering(vk_cmd());
     in_pass = false;
-    // (SMRPG: el destino de la pasada que termina - st.rt ya puede ser el de la siguiente, que la cierra al dibujar:
-    // así cada pass_N.png era el destino siguiente ANTES de dibujar en él)
+    // (SMRPG: the target of the pass that is ending - st.rt may already be the next pass's, which closes this one when
+    // it draws: that way each pass_N.png was the next target BEFORE anything was drawn to it)
     if (g_debug_frame && pass_color0 && pass_color0->backend) {
         char path[256];
         static uint64_t debug_pass_frame = ~0ull;
         static int multi = -1;
         if (multi < 0) multi = getenv("LARECOMP_DEBUG_FRAMES") != NULL;
         if (multi && renderer_present_count() != debug_pass_frame) { debug_pass_frame = renderer_present_count(); debug_pass_no = 0; }
-        // (SMRPG, depuración del borde) LARECOMP_DEBUG_PASS_STRIDE=<n> y _FROM/_TO=<idx>: volcar solo una parte
+        // (SMRPG, edge debugging) LARECOMP_DEBUG_PASS_STRIDE=<n> and _FROM/_TO=<idx>: dump only a subset
         static int stride = -1, from = -1, to = -1;
         if (stride < 0) {
             const char *e;
@@ -1345,8 +1345,9 @@ static void vk_end_pass_at(int line) {
         }
         debug_pass_no++;
     }
-    // (SMRPG) «Negro puro»: si la pasada que termina dibujó la LUT de etalonaje de URP, su negro a 0 (lut_black_fix).
-    // Después del volcado: pass_N.png guarda la LUT como la dibujó el juego; las pasadas siguientes ya la ven corregida.
+    // (SMRPG) "True black": if the pass that is ending drew URP's color grading LUT, its black goes to 0
+    // (lut_black_fix). After the dump: pass_N.png keeps the LUT as the game drew it; the passes that follow already see
+    // it corrected.
     if (pass_color0 && pass_ncolor == 1 && pass_last_fs && g_settings.true_black) lut_black_fix(pass_color0, pass_last_fs);
 }
 
@@ -1361,41 +1362,41 @@ static int content_extent(int e, bool scalable, float sc, float al) {
 
 static bool heap_whole_userptr(void);
 // ================================================================== (SMRPG) AMD FSR (vulkan/vk_fsr.cpp)
-// El antialiasing temporal de AMD sobre la escena de URP, antes de su posproceso. Cada fotograma, por las pasadas que
-// empiezan (fsr_pass_begin, desde begin_pass):
-//   S, D: el color y la profundidad de la escena, la primera pasada con los dos al tamaño de la pantalla del juego;
-//   M: la textura de vectores de movimiento de URP (RG16F a ese tamaño, con su propia profundidad), que el runtime le
-//      hace dibujar (tools/game_overrides.c GetRenderPassInputs);
-//   fases: 1 S dibujado (opacos), 2 M dibujado, 3 S otra vez (transparentes), 4 FSR hecho.
-// FSR va al empezar la primera pasada, tras M, que no dibuja en S (la copia final o el posproceso), o una pasada a M
-// después de los transparentes: la de la cámara superpuesta (la interfaz de las batallas), que no debe pasar por FSR y
-// cuyos vectores solo de cámara pisarían los de los objetos. El resultado queda en S.
-// Las pasadas con la profundidad de la escena (también el prepaso, antes de saber S: la D del fotograma anterior) se
-// dibujan desplazadas el subpíxel del fotograma (set_viewport); solo si el anterior llegó a FSR, para que un fotograma
-// sin él (una pantalla sin la pasada de movimiento) no tiemble.
+// AMD's temporal anti-aliasing on URP's scene, before its post-processing. Every frame, from the passes that begin
+// (fsr_pass_begin, called from begin_pass):
+//   S, D: the scene's color and depth, the first pass with both at the game's screen size;
+//   M: URP's motion vector texture (RG16F at that size, with its own depth), which the runtime makes it draw
+//   (tools/game_overrides.c GetRenderPassInputs);
+//   phases: 1 S drawn (opaques), 2 M drawn, 3 S again (transparents), 4 FSR done.
+// FSR runs at the start of the first pass, after M, that does not draw to S (the final copy or the post-processing), or
+// of a pass to M after the transparents: the overlay camera's (the battle UI), which must not go through FSR and whose
+// camera-only vectors would overwrite the objects'. The result stays in S.
+// Passes with the scene depth (the prepass too, before S is known: the previous frame's D) are drawn offset by the
+// frame's subpixel jitter (set_viewport); only if the previous frame reached FSR, so that a frame without it (a screen
+// without the motion pass) does not shake.
 extern uint64_t renderer_exec_frame(void);
-extern int g_guest_w, g_guest_h;  // (runtime/nvn/output_scale.c: la pantalla del juego)
+extern int g_guest_w, g_guest_h;  // (runtime/nvn/output_scale.c: the game's screen)
 static struct {
     uint64_t frame, seq;
     NvnTexture *S, *D, *M, *lastD;
     int phase;
     bool armed, jitter, reset, low;
-    float jx, jy;          // el subpíxel de este fotograma (0 si no está armado), en píxeles de la imagen
-    float full_x, full_y;  // la escala de render del fotograma (la del ajuste); low: la escena va a 1 / fsr_ratio()
-    uint32_t rw, rh, ow, oh;  // lo dibujado y la salida del último fotograma con FSR
-    FgCamera cam, prev_cam;   // la cámara de este fotograma (fsr_camera_scan; ok = 0: no se encontró) y la del anterior
-    int cam_tries;            // dibujos en M mirados en este fotograma
+    float jx, jy;          // this frame's subpixel jitter (0 if not armed), in image pixels
+    float full_x, full_y;  // the frame's render scale (the setting's); low: the scene runs at 1 / fsr_ratio()
+    uint32_t rw, rh, ow, oh;  // rendered and output size of the last frame with FSR
+    FgCamera cam, prev_cam;   // this frame's camera (fsr_camera_scan; ok = 0: not found) and the previous frame's
+    int cam_tries;            // draws to M examined this frame
 } fsr;
 uint32_t nvn_depth_mode(void);
 
-// ---- (SMRPG) La cámara del fotograma, para la generación de fotogramas 4 de AMD (vk_fg.cpp) y los umbrales de FSR.
-// El primer dibujo en la textura de movimiento (fsr.M) es el de los vectores de la cámara de URP (CameraMotionVectors):
-// sus búferes de constantes llevan la vista-proyección del fotograma sin desplazamiento (_NonJitteredViewProjMatrix) y
-// su inversa (UNITY_MATRIX_I_VP). Se buscan dos matrices 4x4 (en registros de 16 bytes, por filas o por columnas)
-// cuyo producto es la identidad y de las que una tiene la forma de una vista-proyección en perspectiva: su fila w (la
-// profundidad de vista) mide 1 y las filas x e y, quitada la componente de esa dirección, son perpendiculares y guardan
-// la proporción de la imagen. De ella salen la posición (donde x, y y w valen 0), los ejes, el campo de visión vertical
-// y los planos (donde la profundidad del recorte vale la del plano cercano y la del lejano según el modo de profundidad).
+// ---- (SMRPG) The frame's camera, for AMD frame generation 4 (vk_fg.cpp) and FSR's thresholds.
+// The first draw to the motion texture (fsr.M) is URP's camera vectors (CameraMotionVectors): its constant buffers hold
+// the frame's unjittered view-projection (_NonJitteredViewProjMatrix) and its inverse (UNITY_MATRIX_I_VP). We look for
+// two 4x4 matrices (in 16-byte registers, by rows or by columns) whose product is the identity and one of which has the
+// shape of a perspective view-projection: its w row (view depth) has length 1 and the x and y rows, with the component
+// along that direction removed, are perpendicular and keep the image's aspect ratio. It gives the position (where x, y
+// and w are 0), the axes, the vertical field of view and the planes (where clip depth equals the near plane's and the
+// far plane's, depending on the depth mode).
 static float v3dot(const float *a, const float *b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
 static bool m4_load(const float *m, bool tr, float o[4][4]) {
     for (int r = 0; r < 4; r++)
@@ -1415,7 +1416,7 @@ static bool vp_shape(float m[4][4], float aspect) {
     float lx = sqrtf(v3dot(x, x)), ly = sqrtf(v3dot(y, y));
     if (lx < 1e-4f || ly < 1e-4f || fabsf(v3dot(x, y)) / (lx * ly) > 0.02f) return false;
     if (aspect > 0 && fabsf((ly / lx) / aspect - 1) > 0.03f) return false;
-    // una proyección sola (la cámara en el origen y a lo largo de z): no es la del mundo
+    // a bare projection (camera at the origin, along z): not the world's
     bool pure = fabsf(m[3][0]) < 1e-6f && fabsf(m[3][1]) < 1e-6f && fabsf(m[0][1]) < 1e-6f && fabsf(m[1][0]) < 1e-6f &&
                 fabsf(m[0][3]) < 1e-6f && fabsf(m[1][3]) < 1e-6f && fabsf(m[3][3]) < 1e-6f;
     return !pure;
@@ -1435,7 +1436,7 @@ static bool camera_from_vp(float m[4][4], FgCamera *c) {
     float dx = v3dot(m[0], f), dy = v3dot(m[1], f);
     for (int i = 0; i < 3; i++) x[i] = m[0][i] - dx * f[i], y[i] = m[1][i] - dy * f[i];
     float lx = sqrtf(v3dot(x, x)), ly = sqrtf(v3dot(y, y));
-    // la posición: x = y = w = 0 (las filas 0, 1 y 3; Cramer en doble precisión)
+    // the position: x = y = w = 0 (rows 0, 1 and 3; Cramer's rule in double precision)
     const float *a0 = m[0], *a1 = m[1], *a2 = m[3];
     double det = (double)a0[0] * ((double)a1[1] * a2[2] - (double)a1[2] * a2[1]) -
                  (double)a0[1] * ((double)a1[0] * a2[2] - (double)a1[2] * a2[0]) +
@@ -1450,12 +1451,12 @@ static bool camera_from_vp(float m[4][4], FgCamera *c) {
                  b0 * ((double)a1[0] * a2[1] - (double)a1[1] * a2[0])) / det;
     c->pos[0] = (float)cx, c->pos[1] = (float)cy, c->pos[2] = (float)cz;
     for (int i = 0; i < 3; i++) c->fwd[i] = f[i], c->right[i] = x[i] / lx;
-    // arriba = adelante x derecha (el mundo de Unity es de mano izquierda; la proyección de la GPU puede invertir la y)
+    // up = forward x right (Unity's world is left-handed; the GPU projection may flip y)
     c->up[0] = f[1] * c->right[2] - f[2] * c->right[1];
     c->up[1] = f[2] * c->right[0] - f[0] * c->right[2];
     c->up[2] = f[0] * c->right[1] - f[1] * c->right[0];
     c->fov_y = 2 * atanf(s / ly);
-    // los planos: a lo largo de la vista, la profundidad del recorte es a / d + b; invertida si baja con la distancia
+    // the planes: along the view direction, clip depth is a / d + b; reversed if it decreases with distance
     float zc = v3dot(m[2], c->pos) + m[2][3];
     float a = zc / s, b = v3dot(m[2], f) / s;
     bool reversed = a > 0, minus_one = nvn_depth_mode() == 0;
@@ -1463,17 +1464,17 @@ static bool camera_from_vp(float m[4][4], FgCamera *c) {
     float dn = tn - b, df = tf - b;
     c->znear = fabsf(dn) > 1e-9f ? a / dn : 0;
     c->zfar = fabsf(df) > 1e-9f ? a / df : 1e9f;
-    if (!isfinite(c->zfar) || c->zfar <= c->znear || c->zfar > 1e9f) c->zfar = 1e9f;  // (lejano infinito)
+    if (!isfinite(c->zfar) || c->zfar <= c->znear || c->zfar > 1e9f) c->zfar = 1e9f;  // (infinite far plane)
     c->ok = isfinite(c->znear) && c->znear > 0 && isfinite(c->fov_y) && c->fov_y > 0.01f && c->fov_y < 3.0f &&
             isfinite(c->pos[0]) && isfinite(c->pos[1]) && isfinite(c->pos[2]);
     return c->ok;
 }
-// Los dibujos de la pasada de movimiento llevan la vista-proyección de este fotograma y la del anterior
-// (_NonJitteredViewProjMatrix, _PrevViewProjMatrix; en SMRPG, en vs c4 +0 y +64), a veces también la inversa
-// (UNITY_MATRIX_I_VP). Las candidatas con forma de vista-proyección: si hay una sola distinta (cámara quieta), es esa;
-// con su inversa al lado, esa; si hay dos, la anterior es la que ya estaba en el fotograma anterior (era su actual) y
-// se toma la otra; sin historia (la primera vez, un corte), la primera.
-static float cam_last[2][4][4];  // (las candidatas del fotograma anterior)
+// The motion pass's draws carry this frame's view-projection and the previous one's (_NonJitteredViewProjMatrix,
+// _PrevViewProjMatrix; in SMRPG, at vs c4 +0 and +64), sometimes the inverse too (UNITY_MATRIX_I_VP). Of the candidates
+// with the shape of a view-projection: if there is a single distinct one (still camera), that one; if one has its
+// inverse next to it, that one; if there are two, the previous one is the one that was already there in the previous
+// frame (its current one then) and the other is taken; with no history (the first time, a cut), the first.
+static float cam_last[2][4][4];  // (the previous frame's candidates)
 static int cam_nlast;
 static bool m4_near(float a[4][4], float b[4][4]) {
     for (int r = 0; r < 4; r++)
@@ -1481,15 +1482,15 @@ static bool m4_near(float a[4][4], float b[4][4]) {
             if (fabsf(a[r][c] - b[r][c]) > 1e-5f + 1e-5f * fabsf(a[r][c])) return false;
     return true;
 }
-static bool fsr_camera_scan(uint32_t vmask, uint32_t fmask) {  // (las máscaras de búferes de constantes del dibujo)
+static bool fsr_camera_scan(uint32_t vmask, uint32_t fmask) {  // (the draw's constant buffer masks)
     float aspect = fsr.M && fsr.M->height ? (float)fsr.M->width / (float)fsr.M->height : 0;
     FgCamera c;
     memset(&c, 0, sizeof c);
     typedef struct { const float *p; int stage, slot; uint32_t off; } Win;
     Win w[192];
     int n = 0;
-    // (diagnóstico) LARECOMP_FG_CAMDUMP=<fotograma>: los búferes de los dibujos mirados desde ese fotograma (tres)
-    static int dump = -1;  // (-1 sin leer; luego los que quedan)
+    // (diagnostics) LARECOMP_FG_CAMDUMP=<frame>: the buffers of the draws examined from that frame on (three)
+    static int dump = -1;  // (-1: not read yet; then how many are left)
     static long dump_at;
     if (dump == -1) {
         const char *e = getenv("LARECOMP_FG_CAMDUMP");
@@ -1514,7 +1515,7 @@ static bool fsr_camera_scan(uint32_t vmask, uint32_t fmask) {  // (las máscaras
         }
     }
     if (dumping) dump--;
-    // las candidatas distintas (hasta 4), con dónde están y si tienen la inversa al lado
+    // the distinct candidates (up to 4), with where they are and whether they have the inverse next to them
     float cand[4][4][4];
     int nc = 0, where[4], with_inv = -1;
     bool col[4];
@@ -1533,40 +1534,40 @@ static bool fsr_camera_scan(uint32_t vmask, uint32_t fmask) {  // (las máscaras
         }
     int pick = -1;
     const char *why = "";
-    bool seen[4] = {false, false, false, false};  // (estaba ya en el fotograma anterior)
+    bool seen[4] = {false, false, false, false};  // (it was already there in the previous frame)
     for (int k = 0; k < nc; k++)
         for (int l = 0; l < cam_nlast; l++) seen[k] |= m4_near(cand[k], cam_last[l]);
-    if (nc == 1) pick = 0, why = "única";
-    else if (with_inv >= 0) pick = with_inv, why = "con su inversa";
-    else if (nc == 2 && seen[0] != seen[1]) pick = seen[0] ? 1 : 0, why = "la otra es la del fotograma anterior";
-    else if (nc >= 2) pick = 0, why = "la primera (sin historia)";
+    if (nc == 1) pick = 0, why = "the only one";
+    else if (with_inv >= 0) pick = with_inv, why = "with its inverse";
+    else if (nc == 2 && seen[0] != seen[1]) pick = seen[0] ? 1 : 0, why = "the other is the previous frame's";
+    else if (nc >= 2) pick = 0, why = "the first (no history)";
     for (int k = 0; k < 2; k++) memcpy(cam_last[k], cand[k < nc ? k : 0], sizeof cam_last[k]);
     cam_nlast = nc < 2 ? nc : 2;
     if (pick < 0 || !camera_from_vp(cand[pick], &c)) {
         static int missed;
-        if (missed++ < 3) LOG("[fg] cámara: ninguna vista-proyección en los %d registros del dibujo\n", n);
+        if (missed++ < 3) LOG("[fg] camera: no view-projection in the draw's %d registers\n", n);
         return false;
     }
     fsr.cam = c;
-    {   // (diagnóstico) cuántas veces decidió cada regla
+    {   // (diagnostics) how many times each rule decided
         static uint64_t by[4], total;
         by[nc == 1 ? 0 : with_inv >= 0 ? 1 : (nc == 2 && seen[0] != seen[1]) ? 2 : 3]++;
         if (++total % 3600 == 0 && vk_fg_active())
-            LOG("[fg] cámara elegida: %llu única, %llu con inversa, %llu por historia, %llu sin historia\n",
+            LOG("[fg] camera chosen: %llu the only one, %llu with inverse, %llu by history, %llu without history\n",
                 (unsigned long long)by[0], (unsigned long long)by[1], (unsigned long long)by[2], (unsigned long long)by[3]);
     }
     static int told;
     if (told++ < 4 || getenv("LARECOMP_FG_LOGCAM"))
-        LOG("[fg] cámara (%s c%d +%u, %s, %d candidatas: %s): posición %.2f %.2f %.2f, adelante %.3f %.3f %.3f, arriba %.3f %.3f "
-            "%.3f, campo vertical %.1f grados, planos %.3f .. %.1f\n",
-            w[where[pick]].stage ? "fs" : "vs", w[where[pick]].slot + 3, w[where[pick]].off, col[pick] ? "por columnas" : "por filas",
+        LOG("[fg] camera (%s c%d +%u, %s, %d candidates: %s): position %.2f %.2f %.2f, forward %.3f %.3f %.3f, up "
+            "%.3f %.3f %.3f, vertical field of view %.1f degrees, planes %.3f .. %.1f\n",
+            w[where[pick]].stage ? "fs" : "vs", w[where[pick]].slot + 3, w[where[pick]].off, col[pick] ? "by columns" : "by rows",
             nc, why, c.pos[0], c.pos[1], c.pos[2], c.fwd[0], c.fwd[1], c.fwd[2], c.up[0], c.up[1], c.up[2], c.fov_y * 57.29578f,
             c.znear, c.zfar);
     return true;
 }
 extern void renderer_get_scale(float *sx, float *sy);  // (textures.c)
 extern void renderer_set_scale(float sx, float sy);
-static float fsr_ratio(void) {  // nativo, calidad, equilibrado, rendimiento, ultra rendimiento
+static float fsr_ratio(void) {  // native, quality, balanced, performance, ultra performance
     static const float r[] = {1.0f, 1.5f, 1.7f, 2.0f, 3.0f};
     int m = g_settings.fsr_mode;
     return m >= 0 && m <= 4 ? r[m] : 1.0f;
@@ -1586,14 +1587,14 @@ static void fsr_dispatch(void) {
     if (bs->width != bd->width || bs->height != bd->height || bs->width != bm->width || bs->height != bm->height) return;
     static float mvx = 0, mvy = 0;
     static int inv = -1;
-    if (inv < 0) {  // (pruebas) LARECOMP_FSR_MV="x,y": multiplicadores de la escala de los vectores; LARECOMP_FSR_DEPTH=0
+    if (inv < 0) {  // (testing) LARECOMP_FSR_MV="x,y": vector scale multipliers; LARECOMP_FSR_DEPTH=0
         const char *e = getenv("LARECOMP_FSR_MV");
         mvx = -1, mvy = -1;
         if (e) sscanf(e, "%f,%f", &mvx, &mvy);
         e = getenv("LARECOMP_FSR_DEPTH");
         inv = !e || atoi(e) != 0;
     }
-    // lo dibujado ocupa la esquina de las imágenes (su escala sobre la de la reserva); la salida, la escala completa
+    // the rendered area takes up the corner of the images (its scale over the allocation's); the output, the full scale
     float fx = bs->scalable && bs->ax > 0 ? bs->sx / bs->ax : 1, fy = bs->scalable && bs->ay > 0 ? bs->sy / bs->ay : 1;
     uint32_t rw = (uint32_t)lroundf(bs->width * fx), rh = (uint32_t)lroundf(bs->height * fy);
     uint32_t ow = rw, oh = rh;
@@ -1603,11 +1604,12 @@ static void fsr_dispatch(void) {
         if (oh > bs->height) oh = bs->height;
     }
     if (!rw || !rh || !ow || !oh) return;
-    {   // (diagnóstico) cada 600 fotogramas con FSR: en cuántos estaba la cámara, y la última
+    {   // (diagnostics) every 600 frames with FSR: in how many of them the camera was found, and the last one
         static uint64_t nf, nc;
         nf++, nc += fsr.cam.ok != 0;
         if (nf % 3600 == 0 && vk_fg_active())
-            LOG("[fg] cámara en %llu de %llu fotogramas con FSR; la última: posición %.2f %.2f %.2f, adelante %.3f %.3f %.3f\n",
+            LOG("[fg] camera on %llu of %llu frames with FSR; the last one: position %.2f %.2f %.2f, forward %.3f "
+                "%.3f %.3f\n",
                 (unsigned long long)nc, (unsigned long long)nf, fsr.prev_cam.pos[0], fsr.prev_cam.pos[1], fsr.prev_cam.pos[2],
                 fsr.prev_cam.fwd[0], fsr.prev_cam.fwd[1], fsr.prev_cam.fwd[2]);
     }
@@ -1619,10 +1621,11 @@ static void fsr_dispatch(void) {
     d.render_w = rw, d.render_h = rh, d.out_w = ow, d.out_h = oh;
     d.jitter_x = fsr.jx;
     d.jitter_y = fsr.jy;
-    d.mv_scale_x = mvx * (float)rw;  // (los vectores de URP van en UV de lo dibujado)
+    d.mv_scale_x = mvx * (float)rw;  // (URP's vectors are in UVs of the rendered area)
     d.mv_scale_y = mvy * (float)rh;
-    {   // el tiempo medido desde el FSR anterior (como la generación de fotogramas, vk_fg.cpp); si no vale (el primero, o
-        // tras una pausa de más de 100 ms), el periodo del vsync: el límite de FPS, o 60 en los combates (hle/battle_rate.c)
+    {   // the time measured since the previous FSR (like frame generation, vk_fg.cpp); if it is not valid (the first
+        // one, or after a pause of more than 100 ms), the vsync period: the FPS limit, or 60 in battles
+        // (hle/battle_rate.c)
         static uint64_t last_ns;
         uint64_t now = SDL_GetTicksNS();
         double dt = last_ns ? (double)(now - last_ns) / 1e6 : 0;
@@ -1632,12 +1635,13 @@ static void fsr_dispatch(void) {
         d.frame_ms = dt > 0 && dt < 100 ? (float)dt
                    : p ? (float)(p / 1e6) : 1000.0f / (float)(g_settings.fps_limit > 0 ? g_settings.fps_limit : 60);
     }
-    d.sharpness = 0;  // (la nitidez del menú la da el RCAS del final, como sin FSR)
+    d.sharpness = 0;  // (the menu's sharpness comes from the RCAS at the end, as without FSR)
     d.reset = fsr.reset || ow != fsr.ow || oh != fsr.oh;
     d.depth_inverted = inv != 0;
     d.version = g_settings.fsr_version;
-    // la cámara del fotograma (fsr_camera_scan): sus planos y su campo de visión para los umbrales de FSR; un corte (otro
-    // encuadre: la dirección gira más de 25 grados o el campo cambia más de un 10 %) empieza la historia de nuevo
+    // the frame's camera (fsr_camera_scan): its planes and field of view for FSR's thresholds; a cut (a different
+    // framing: the direction turns more than 25 degrees or the field of view changes by more than 10%) restarts the
+    // history
     bool cut = false;
     if (fsr.cam.ok) {
         d.cam_near = fsr.cam.znear, d.cam_far = fsr.cam.zfar < 1e8f ? fsr.cam.zfar : 0, d.cam_fov = fsr.cam.fov_y;
@@ -1647,19 +1651,20 @@ static void fsr_dispatch(void) {
     d.reset = d.reset || cut;
     fsr.reset = false;
     fsr.rw = rw, fsr.rh = rh, fsr.ow = ow, fsr.oh = oh;
-    gp_mark(vk_cmd(), "AMD FSR %ux%u -> %ux%u (version %d)", rw, rh, ow, oh, d.version);  // (LARECOMP_GPUPROF_AT: su fila)
+    gp_mark(vk_cmd(), "AMD FSR %ux%u -> %ux%u (version %d)", rw, rh, ow, oh, d.version);  // (LARECOMP_GPUPROF_AT: its row)
     rec_CmdCallback(vk_cmd(), vk_fsr_record, &d, sizeof d);
-    if (vk_fg_active()) {  // (SMRPG) la generación de fotogramas de AMD: este fotograma configurado y preparado (vk_fg.cpp)
-        extern int g_fg_pic[4];  // (device.c: dónde quedó la imagen del juego en la ventana)
+    if (vk_fg_active()) {  // (SMRPG) AMD frame generation: this frame configured and prepared (vk_fg.cpp)
+        extern int g_fg_pic[4];  // (device.c: where the game's image ended up in the window)
         FgPrepare p;
         memset(&p, 0, sizeof p);
         p.depth = d.depth, p.mv = d.mv;
         p.render_w = rw, p.render_h = rh;
         p.jitter_x = fsr.jx, p.jitter_y = fsr.jy;
-        // la Y al revés que para FSR: medido en Mushroom Way caminando (capturas de lo presentado, LARECOMP_FG_PSHOT), con
-        // la escala de FSR la generación 4 solo fundía las dos imágenes al moverse la cámara en vertical (y la 3.1 se
-        // apoyaba en su flujo óptico); con la Y invertida, las dos interpolan (medio desplazamiento). En horizontal, la
-        // misma X que FSR interpola. FSR, en cambio, rinde peor con la Y invertida (más error contra el nativo).
+        // Y the other way round from FSR. Measured walking in Mushroom Way (captures of what was presented,
+        // LARECOMP_FG_PSHOT): with FSR's scale, frame generation 4 only blended the two frames when the camera moved
+        // vertically (and 3.1 leaned on its optical flow); with Y inverted, both interpolate (half the displacement).
+        // Horizontally, the same X as FSR interpolates. FSR, on the other hand, does worse with Y inverted (more error
+        // against native).
         p.mv_scale_x = d.mv_scale_x, p.mv_scale_y = -d.mv_scale_y;
         p.reset = d.reset;
         p.depth_inverted = d.depth_inverted;
@@ -1670,10 +1675,10 @@ static void fsr_dispatch(void) {
         p.hudless = vk_fg_hudless();
         rec_CmdCallback(vk_cmd(), vk_fg_prepare_record, &p, sizeof p);
     }
-    ss_forget();  // (FSR enlaza sus propios pipelines y conjuntos: lo siguiente lo pone todo otra vez)
-    if (fsr.low) {  // la escena ya está ampliada: lo que sigue (posproceso, interfaz) va a la escala completa
+    ss_forget();  // (FSR binds its own pipelines and sets: whatever comes next sets it all again)
+    if (fsr.low) {  // the scene is already upscaled: what follows (post-processing, UI) runs at full scale
         renderer_set_scale(fsr.full_x, fsr.full_y);
-        renderer_mark_gpu_owned(fsr.S);  // (su contenido, a esa escala)
+        renderer_mark_gpu_owned(fsr.S);  // (its contents, at that scale)
         fsr.low = false;
     }
 }
@@ -1681,7 +1686,7 @@ static void fsr_pass_begin(void) {
     fsr.jitter = false;
     if (!fsr_enabled()) { fsr.armed = fsr.low = false; fsr.reset = true; return; }
     uint64_t fr = renderer_exec_frame();
-    if (fr != fsr.frame) {  // un fotograma nuevo
+    if (fr != fsr.frame) {  // a new frame
         fsr.armed = fsr.phase == 4;
         if (fsr.D) fsr.lastD = fsr.D;
         fsr.frame = fr;
@@ -1689,9 +1694,10 @@ static void fsr_pass_begin(void) {
         fsr.phase = 0;
         fsr.seq++;
         if (fsr.cam.ok) fsr.prev_cam = fsr.cam;
-        fsr.cam.ok = 0, fsr.cam_tries = 0;  // (la de este fotograma la busca draw_ en la pasada de movimiento)
-        // (escalado) la escena a menos resolución hasta FSR: la escala de render del fotograma, que el present acaba de
-        // poner, baja; fsr_dispatch la devuelve. Solo armado (el anterior llegó a FSR) y sin la resolución dinámica.
+        fsr.cam.ok = 0, fsr.cam_tries = 0;  // (draw_ looks for this frame's in the motion pass)
+        // (upscaling) the scene at a lower resolution until FSR: the frame's render scale, which the present has just
+        // set, goes down; fsr_dispatch restores it. Only when armed (the previous frame reached FSR) and without
+        // dynamic resolution.
         renderer_get_scale(&fsr.full_x, &fsr.full_y);
         float ratio = fsr_ratio();
         fsr.low = fsr.armed && ratio > 1.01f && g_settings.res_mode != RES_DYNAMIC;
@@ -1752,7 +1758,7 @@ static void begin_pass(void) {
     st.rt_dirty = false;
     VkCommandBuffer cb = vk_cmd();
     vk_full_barrier(cb);  // passes, copies and dispatches see each other's results
-    fsr_pass_begin();  // (SMRPG) AMD FSR: la escena antes de esta pasada, y si esta va desplazada un subpíxel
+    fsr_pass_begin();  // (SMRPG) AMD FSR: the scene before this pass, and whether this one gets the subpixel jitter
     {
         NvnTexture *t0n = st.rt.ncolor ? st.rt.color[0] : NULL;
         dl_note("pass %d color %ux%u fmt %#x depth %p", st.rt.ncolor, t0n ? t0n->width : 0, t0n ? t0n->height : 0, t0n ? t0n->format : 0,
@@ -1892,17 +1898,17 @@ static void begin_pass(void) {
     pass_color0 = st.rt.ncolor ? st.rt.color[0] : NULL;
     pass_last_fs = 0;
     vp_sx = pass_sx; vp_sy = pass_sy; vp_ox = 0; vp_oy = 0;
-    if (g_debug_frame) {  // (SMRPG) la escala de la pasada y la de sus destinos: reserva (ax) y contenido (sx)
-        LOG("[pass] %ux%u escala %.3f x %.3f:", minw, minh, pass_sx, pass_sy);
+    if (g_debug_frame) {  // (SMRPG) the pass's scale and its targets': allocation (ax) and contents (sx)
+        LOG("[pass] %ux%u scale %.3f x %.3f:", minw, minh, pass_sx, pass_sy);
         for (int i = 0; i < st.rt.ncolor; i++) {
             const NvnTexture *t = st.rt.color[i];
             const TexBackend *b = t ? t->backend : NULL;
-            if (b) LOG(" c%d %ux%u (juego %ux%u) ax %.3f sx %.3f%s", i, b->width, b->height, t->width, t->height, b->ax, b->sx,
-                       b->scalable ? "" : " fija");
+            if (b) LOG(" c%d %ux%u (game %ux%u) ax %.3f sx %.3f%s", i, b->width, b->height, t->width, t->height, b->ax, b->sx,
+                       b->scalable ? "" : " fixed");
         }
         if (st.rt.depth && st.rt.depth->backend) {
             const TexBackend *b = st.rt.depth->backend;
-            LOG(" d %ux%u ax %.3f sx %.3f%s", b->width, b->height, b->ax, b->sx, b->scalable ? "" : " fija");
+            LOG(" d %ux%u ax %.3f sx %.3f%s", b->width, b->height, b->ax, b->sx, b->scalable ? "" : " fixed");
         }
         LOG("\n");
     }
@@ -1955,7 +1961,7 @@ static void apply_scissor(void) {
 static void set_viewport(float x, float y, float w, float h, float zn, float zf) {
     if (w <= 0) w = 1;
     if (h == 0) h = 1;
-    if (fsr.jitter) x += fsr.jx, y += fsr.jy;  // (SMRPG) AMD FSR: el subpíxel de este fotograma
+    if (fsr.jitter) x += fsr.jx, y += fsr.jy;  // (SMRPG) AMD FSR: this frame's subpixel jitter
     VkViewport vp = {x, y + h, w, -h, fminf(fmaxf(zn, 0), 1), fminf(fmaxf(zf, 0), 1)};
     if (!ss_need(SS_VP, !memcmp(&vp, &ss.vp, sizeof vp))) return;
     ss.vp = vp;
@@ -2275,8 +2281,8 @@ static bool translate_program_now(Prog *p) {
     maxwell_gmem_size = HEAP_MAX;
     maxwell_gmem_chunk_shift = gmem_chunk_shift();
     pthread_mutex_lock(&translate_lock);
-    {  // (SMRPG, diagnóstico; como el renderizador Metal) LARECOMP_DBG_FS=<código fs hex>:<pc hex>:<registro>: ese shader
-       // de fragmentos saca como gris el valor del registro tras la instrucción en pc (maxwell/translate.c)
+    {  // (SMRPG, diagnostics; like the Metal renderer) LARECOMP_DBG_FS=<fs code hex>:<pc hex>:<register>: that fragment
+       // shader outputs, as gray, the register's value after the instruction at pc (maxwell/translate.c)
         static int parsed;
         static unsigned long long dbg_addr;
         static unsigned dbg_pc;
@@ -2878,9 +2884,9 @@ typedef struct { NvnTexture *key; TexBackend copy; } Snap;
 static Snap snaps[16];
 static int nsnaps;
 
-// SMRPG: el manejador de una textura del shader, de las tablas de c[2] del driver: handle_offset es la palabra de la
-// textura (combinada 0x20 + 8r o separada 0x168 + 8r) y, en un TEX.B con sampler separado, bindless_offset la del
-// sampler (0x568 + 8r): el shader une las dos con OR, y aquí igual (textura en los bits 0-19, sampler en 20-31).
+// SMRPG: a shader texture's handle, from the driver's c[2] tables: handle_offset is the texture word (combined 0x20 +
+// 8r or separate 0x168 + 8r) and, in a TEX.B with a separate sampler, bindless_offset is the sampler word (0x568 + 8r):
+// the shader ORs the two together, and so does this (texture in bits 0-19, sampler in 20-31).
 static uint64_t shader_tex_handle(int stage, const ShaderTexture *st_) {
     uint32_t off = st_->handle_offset;
     uint64_t h = 0;
@@ -5294,7 +5300,7 @@ static void shadow_slot_check(int stage, const ShaderTexture *st_, int i, uint64
 
 static void texture_info(int stage, ShaderInfo *si, int i, VkDescriptorImageInfo *out, float sc[2], uint32_t wh[2], float fr[2]) {
     ShaderTexture *st_ = &si->tex[i];
-    uint64_t h = shader_tex_handle(stage, st_);  // (SMRPG: combinadas y separadas)
+    uint64_t h = shader_tex_handle(stage, st_);  // (SMRPG: combined and separate)
     VkImageView view = VK_NULL_HANDLE;
     VkSampler smp = VK_NULL_HANDLE;
     uint32_t tic = h & 0xFFFFF, tsc = (uint32_t)(h >> 20) & 0xFFF;
@@ -5410,7 +5416,7 @@ static VkDescriptorSet stage_set(Prog *p, VkDescriptorSetLayout layout, uint32_t
         } else if (b->binding == 18) {
             for (int t = 0; t < si->ntex && t < 64; t++) {  // scale x, y, content part x, y
                 rs[1 + t][0] = tex_sc[sg][t][0]; rs[1 + t][1] = tex_sc[sg][t][1]; rs[1 + t][2] = tex_fr[sg][t][0]; rs[1 + t][3] = tex_fr[sg][t][1];
-                if (g_debug_frame && getenv("LARECOMP_DEBUG_DATA"))  // (SMRPG, diagnóstico) la fila que lee el shader
+                if (g_debug_frame && getenv("LARECOMP_DEBUG_DATA"))  // (SMRPG, diagnostics) the row the shader reads
                     LOG("[draw]   rscale[%d] (stage %d): %.4f %.4f %.4f %.4f\n", 1 + t, stage, rs[1 + t][0], rs[1 + t][1], rs[1 + t][2], rs[1 + t][3]);
             }
             if (lean) bi[n] = ubo_span(rscale_dedupe(sg, (const float (*)[4])rs, si->ntex < 64 ? si->ntex : 64), sizeof rs);
@@ -5550,7 +5556,7 @@ static CsProg *compute_program(NvnProgram *np) {
     if (shader_rec_recording()) {
         ShaderRec rec = {.kind = 'C', .vs = shader_stage_hash(ss), .local = {local[0], local[1], local[2]}};
         shader_rec_note(&rec);
-        shader_code_note(rec.vs, ss);  // (SMRPG: su código, para la próxima preparación)
+        shader_code_note(rec.vs, ss);  // (SMRPG: its code, for the next prep run)
     }
     uint64_t ch = shader_stage_hash(ss);
     CsProg *cp = ch && prep_cs_n ? PREP_GET(prep_cs, cs_content_key(ch, local)) : NULL;  // prepared before the game
@@ -6001,14 +6007,14 @@ static void prep_check(const PipeKey *k, uint64_t vh, uint64_t fh, const ShaderR
 
 static void draw_(CmdRec *r, bool indexed);
 
-// (SMRPG) Un dibujo cuyo programa o pipeline aún se compila se salta (sin tirones); pero uno en un destino pequeño
-// (<= 512 x 512: la miniatura de los guardados, iconos, niveles pequeños del bloom) espera: suelen ser dibujos de una
-// sola vez (la miniatura de 266x150 salía negra) y esperar cuesta poco. Con «Compilación de shaders: esperar» (ajustes)
-// esperan todos (sin huecos, con algún tirón la primera vez).
-// «Equilibrada» (el modo por defecto desde la versión 37): espera también, pero como mucho 10 ms en total por
-// fotograma; agotado ese tiempo, lo que falte se salta como en segundo plano. Al entrar en una zona, con la caché de
-// pipelines del driver caliente casi todo llega a tiempo: sin objetos que aparecen tarde y sin tirones largos.
-static int g_wait_mode;  // (lo que decidió draw_waits_for_build para el dibujo en curso: 1 sin límite, 2 con tope)
+// (SMRPG) A draw whose program or pipeline is still compiling is skipped (no hitches); but one into a small target (<=
+// 512 x 512: the save thumbnail, icons, small bloom levels) waits: those tend to be one-off draws (the 266x150
+// thumbnail came out black) and waiting costs little. With "Shader compilation: wait" (settings) they all wait (no
+// holes, the odd hitch the first time).
+// "Balanced" (the default mode since version 37): waits too, but for at most 10 ms in total per frame; once that time
+// is used up, whatever is missing is skipped as in background mode. When entering a zone, with the driver's pipeline
+// cache warm, nearly everything arrives in time: no objects popping in late and no long hitches.
+static int g_wait_mode;  // (what draw_waits_for_build decided for the current draw: 1 no limit, 2 capped)
 static bool draw_waits_for_build(void) {
     extern int settings_shader_wait(void);
     int m = settings_shader_wait();
@@ -6098,7 +6104,7 @@ static void draw_(CmdRec *r, bool indexed) {
         if (st.ubuf[0][5].addr) widescreen_scene_ubo((const float *)(uintptr_t)st.ubuf[0][5].addr, st.ubuf[0][5].size);
     }
     if (g_debug_frame) debug_draw(pr, r, indexed);
-    // (SMRPG) la cámara del fotograma: en los primeros dibujos en la textura de movimiento (el de los vectores de cámara)
+    // (SMRPG) the frame's camera: in the first draws to the motion texture (the camera vectors draw)
     if (fsr.phase == 2 && fsr.M && st.rt.ncolor && st.rt.color[0] == fsr.M && fsr.cam_tries < 4) {
         fsr.cam_tries++;
         if (fsr_camera_scan(pr->vi->cbuf_mask, pr->fi->cbuf_mask)) fsr.cam_tries = 99;
@@ -6157,7 +6163,7 @@ static void draw_(CmdRec *r, bool indexed) {
                 ShaderRec rec;
                 rec_from_state(&rec, vkey.flip_x, mode);
                 shader_rec_note(&rec);
-                shader_code_note(rec.vs, &st.program->stages[0]);  // (SMRPG: su código, para la próxima preparación)
+                shader_code_note(rec.vs, &st.program->stages[0]);  // (SMRPG: its code, for the next prep run)
                 shader_code_note(rec.fs, &st.program->stages[1]);
             }
             pp = prep_pipes_n ? PREP_GET(prep_pipes, ph) : NULL;  // prepared before the game
@@ -6562,7 +6568,7 @@ static void draw_(CmdRec *r, bool indexed) {
     }
     stat_draws++;
     cum_draws++;
-    pass_last_fs = g_cur_fs_hash;  // (SMRPG: «Negro puro» solo tras un dibujo de verdad de la LUT, vk_end_pass_at)
+    pass_last_fs = g_cur_fs_hash;  // (SMRPG: "True black" only after a real draw of the LUT, vk_end_pass_at)
     if (g_gpuprof_frame && gp_n) {
         if (!gp_draws[gp_n - 1]) {  // first draw of the row: its fragment shader hash
             size_t l = strlen(gp_label[gp_n - 1]);
@@ -6577,20 +6583,20 @@ static void debug_draw(Prog *pr, CmdRec *r, bool indexed) {
         (unsigned long long)(indexed ? r->x[6] : r->x[4]), (unsigned long long)r->x[0], (unsigned long long)r->x[2],
         (unsigned long long)st.program->stages[0].code_addr, (unsigned long long)st.program->stages[1].code_addr,
         pr->vi->cbuf_mask, pr->fi->cbuf_mask, st.rt.ncolor);
-    for (int i = 0; i < st.rt.ncolor; i++)  // (SMRPG: con el puntero, para emparejar destinos y texturas)
+    for (int i = 0; i < st.rt.ncolor; i++)  // (SMRPG: with the pointer, to match targets and textures)
         if (st.rt.color[i]) LOG(" %ux%u/f%#x %p", st.rt.color[i]->width, st.rt.color[i]->height, st.rt.color[i]->format, (void *)st.rt.color[i]);
     if (st.rt.depth) LOG(" d%#x %p", st.rt.depth->format, (void *)st.rt.depth);
     LOG(" | vp %.0f %.0f %.0f %.0f | attrs %#x blend %#x ds %02x%02x%02x poly %02x%02x chmask %08x\n", st.viewport[0][0], st.viewport[0][1],
         st.viewport[0][2], st.viewport[0][3], pr->vi->attr_mask, st.color_state[0], st.ds[0], st.ds[1], st.ds[2], st.poly[0], st.poly[1],
         st.channel_mask);
-    if ((st.color_state[0] & 1)) {  // (SMRPG) la mezcla del destino 0: valores NVN y factores de Vulkan
+    if ((st.color_state[0] & 1)) {  // (SMRPG) target 0's blending: NVN values and Vulkan factors
         const uint8_t *b = st.blend[0];
         LOG("[draw]   blend0 nvn %02x %02x %02x %02x %02x %02x %02x %02x -> vk src %d dst %d op %d | a src %d dst %d op %d | color %.3f %.3f %.3f %.3f\n",
             b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], (int)blend_factor(b[1]), (int)blend_factor(b[2]), (int)blend_op(b[5]),
             (int)blend_factor(b[3]), (int)blend_factor(b[4]), (int)blend_op(b[6]), st.blend_color[0], st.blend_color[1],
             st.blend_color[2], st.blend_color[3]);
     }
-    if (indexed) {  // (SMRPG) el búfer de índices: tipo, dirección, vértice base y los primeros índices
+    if (indexed) {  // (SMRPG) the index buffer: type, address, base vertex and the first indices
         uint64_t ia = r->x[3];
         LOG("[draw]   index type %llu addr %llx base vertex %lld base instance %llu:", (unsigned long long)r->x[1],
             (unsigned long long)ia, (long long)(int32_t)r->x[4], (unsigned long long)r->x[5]);
@@ -6599,7 +6605,7 @@ static void debug_draw(Prog *pr, CmdRec *r, bool indexed) {
                                                                        : ((const uint32_t *)(uintptr_t)ia)[k]);
         LOG("\n");
     }
-    for (int a = 0; a < 16 && a < st.nattrib; a++) {  // (SMRPG) los atributos que lee el shader: formato, flujo, desplazamiento
+    for (int a = 0; a < 16 && a < st.nattrib; a++) {  // (SMRPG) the attributes the shader reads: format, stream, offset
         if (!((pr->vi->attr_mask >> a) & 1)) continue;
         uint32_t v = st.attrib[a], s = (v >> 8) & 0x1F;
         LOG("[draw]   attr%d: format %#x stream %u offset %u | stream stride %u divisor %u\n", a, v & 0xFF, s, v >> 13,
@@ -6613,8 +6619,8 @@ static void debug_draw(Prog *pr, CmdRec *r, bool indexed) {
             for (int k = 0; k < 16; k++) LOG(" %.4g", v[k]);
             LOG("\n");
         }
-        // (SMRPG) la ranura c[k] del shader es el índice k - 3 de la API (como en cbuf_span): c[0] y c[1] son del driver
-        // y del compilador, y no se imprimen. Antes se imprimía el índice k, que no es lo que lee el shader.
+        // (SMRPG) the shader's c[k] slot is API index k - 3 (as in cbuf_span): c[0] and c[1] belong to the driver and
+        // the compiler and are not printed. It used to print index k, which is not what the shader reads.
         for (int c = 3; c < 18; c++) {
             if (!((pr->fi->cbuf_mask >> c) & 1) || !st.ubuf[1][c - 3].addr) continue;
             const float *u = (const float *)(uintptr_t)st.ubuf[1][c - 3].addr;
@@ -6622,7 +6628,7 @@ static void debug_draw(Prog *pr, CmdRec *r, bool indexed) {
             for (int k = 0; k < 96 && k * 4 < (int)st.ubuf[1][c - 3].size; k++) LOG(" %.6g", u[k]);
             LOG("\n");
         }
-        for (int c = 3; c < 18; c++) {  // (SMRPG) también los del shader de vértices, y los que no están vinculados
+        for (int c = 3; c < 18; c++) {  // (SMRPG) the vertex shader's too, and the ones that are not bound
             if (!((pr->vi->cbuf_mask >> c) & 1)) continue;
             if (!st.ubuf[0][c - 3].addr) { LOG("[draw]   vcb%d: NOT BOUND\n", c); continue; }
             const float *u = (const float *)(uintptr_t)st.ubuf[0][c - 3].addr;
@@ -6635,9 +6641,9 @@ static void debug_draw(Prog *pr, CmdRec *r, bool indexed) {
         NvnTexture *t = shader_texture_object(1, &pr->fi->tex[i]);
         const TexBackend *b = t ? (const TexBackend *)t->backend : NULL;
         if (!t) { LOG("[draw]   tex%d: none\n", i); continue; }
-        uint64_t th = shader_tex_handle(1, &pr->fi->tex[i]);  // (SMRPG: de qué palabras de c[2] sale y qué sampler da)
-        {  // (SMRPG, diagnóstico) LARECOMP_DEBUG_FS_INPUTS=<código fs hex>: vuelca sus texturas de entrada en el momento
-           // del dibujo (build/fsin_<código>_<i>.png), para compararlas con lo que dejó la pasada que las escribió
+        uint64_t th = shader_tex_handle(1, &pr->fi->tex[i]);  // (SMRPG: which c[2] words it comes from and which sampler it gives)
+        {  // (SMRPG, diagnostics) LARECOMP_DEBUG_FS_INPUTS=<fs code hex>: dumps its input textures at draw time
+           // (build/fsin_<code>_<i>.png), to compare them with what the pass that wrote them left
             static unsigned long long want = ~0ull;
             if (want == ~0ull) want = getenv("LARECOMP_DEBUG_FS_INPUTS") ? strtoull(getenv("LARECOMP_DEBUG_FS_INPUTS"), NULL, 16) : 0;
             if (want && st.program->stages[1].code_addr == want && b) {
@@ -6646,18 +6652,18 @@ static void debug_draw(Prog *pr, CmdRec *r, bool indexed) {
                 renderer_save_texture_tex((TexBackend *)b, path);
             }
         }
-        if (st.spool && ((th >> 20) & 0xFFF) < (uint64_t)st.spool->count) {  // (y el sampler: ¿qué filtra y cómo?)
+        if (st.spool && ((th >> 20) & 0xFFF) < (uint64_t)st.spool->count) {  // (and the sampler: what does it filter, and how?)
             const NvnSamplerDesc *sd = &((const NvnSamplerDesc *)st.spool->entries)[(th >> 20) & 0xFFF];
             LOG("[draw]   tex%d sampler %llu: filter %u/%u wrap %u %u %u compare %u/%u reduction %u lod %.2f..%.2f bias %.2f aniso %.1f\n", i,
                 (unsigned long long)((th >> 20) & 0xFFF), sd->min_filter, sd->mag_filter, sd->wrap[0], sd->wrap[1], sd->wrap[2],
                 sd->compare_mode, sd->compare_func, sd->reduction, sd->lod_min, sd->lod_max, sd->lod_bias, sd->max_aniso);
         }
-        if (b)  // (y la imagen: muestras, capas, tipo base, formato de Vulkan, niveles)
+        if (b)  // (and the image: samples, layers, base type, Vulkan format, levels)
             LOG("[draw]   tex%d image: samples %u layers %u depth %u base_type %d vkformat %d levels %u target %u\n", i, b->samples,
                 b->layers, b->depth, (int)b->base_type, (int)b->format, b->levels, t->target);
-        if (i < 64)  // (y la fila de rscale que verá el shader: escala y parte con contenido)
+        if (i < 64)  // (and the rscale row the shader will see: scale and the part with contents)
             LOG("[draw]   tex%d rscale: sc %.4f %.4f fr %.4f %.4f\n", i, tex_sc[1][i][0], tex_sc[1][i][1], tex_fr[1][i][0], tex_fr[1][i][1]);
-        if (st.tpool && (th & 0xFFFFF) < (uint64_t)st.tpool->count) {  // (y la vista con la que se registró en el pool)
+        if (st.tpool && (th & 0xFFFFF) < (uint64_t)st.tpool->count) {  // (and the view it was registered with in the pool)
             const NvnTexEntry *te = &((const NvnTexEntry *)st.tpool->entries)[th & 0xFFFFF];
             if (te->has_view)
                 LOG("[draw]   tex%d view: mask %#x levels %u+%u target %u layers %u+%u format %#x ds %u swz %u%u%u%u\n", i,
@@ -6688,19 +6694,19 @@ static void copy_region_dims(NvnTexture *t, const TexRefRec *ref, const FormatIn
     *img = st.copy_image_stride ? st.copy_image_stride : *row * hb;
 }
 
-// (SMRPG) una orden grabada antes de que el juego finalizase su textura y enviada después (en la consola es válido:
-// la orden escribe la memoria del pool): el objeto ya no tiene imagen. Se salta, con una línea en el registro
-// (objects.c deja el NvnTexture en un cementerio en vez de liberarlo, para que esto se pueda ver)
+// (SMRPG) a command recorded before the game finalized its texture and submitted afterwards (valid on the console: the
+// command writes the pool's memory): the object no longer has an image. It is skipped, with a line in the log
+// (objects.c leaves the NvnTexture in a graveyard instead of freeing it, so that this can be seen)
 static bool tex_dead(const NvnTexture *t, const char *what) {
     if (!t || !t->dead) return false;
     static int n;
-    if (n++ < 16) LOG("[vk] %s: la textura %p (%ux%u fmt %#x) ya estaba finalizada; se salta\n", what, (void *)t, t->width, t->height, t->format);
+    if (n++ < 16) LOG("[vk] %s: texture %p (%ux%u fmt %#x) was already finalized; skipped\n", what, (void *)t, t->width, t->height, t->format);
     return true;
 }
 static void copy_buffer_to_texture(uint64_t src, const TexRefRec *dst) {
     snap_reason = "buf2tex"; snapshots_invalidate(NULL);
     NvnTexture *t = (NvnTexture *)(uintptr_t)dst->tex;
-    if (!t || !src || tex_dead(t, "copia búfer -> textura")) return;
+    if (!t || !src || tex_dead(t, "buffer -> texture copy")) return;
     alias_before_write(t, 0, "upload");
     vk_end_pass();
     const FormatInfo *fi;
@@ -6719,9 +6725,9 @@ static void copy_buffer_to_texture(uint64_t src, const TexRefRec *dst) {
     }
     bool array = b->layers > 1 && b->depth == 1;
     uint32_t hb = ((uint32_t)rg[4] + fi->bh - 1) / fi->bh, wb = ((uint32_t)rg[3] + fi->bw - 1) / fi->bw;
-    // (SMRPG) texturas HD (vulkan/texpack.c). Un nivel 0 entero: su huella decide si la imagen es la de un PNG (y si
-    // se vuelca). En una textura ya sustituida, los demás niveles de los mismos datos no se copian; una escritura
-    // parcial del nivel 0 son datos nuevos: vuelve la imagen del juego.
+    // (SMRPG) HD textures (vulkan/texpack.c). A whole level 0: its hash decides whether the image is a PNG's (and
+    // whether it is dumped). On an already replaced texture, the other levels of the same data are not copied; a
+    // partial write to level 0 is new data: the game's image comes back.
     bool full0 = level == 0 && rg[0] == 0 && rg[1] == 0 && rg[2] == 0 && rg[5] == 1 && (uint32_t)rg[3] == t->width &&
                  (uint32_t)rg[4] == t->height;
     if (full0 && texpack_active() && vk_texpack_candidate(t)) {
@@ -6730,7 +6736,7 @@ static void copy_buffer_to_texture(uint64_t src, const TexRefRec *dst) {
         if (b->replaced) vk_texpack_unreplace(t);
         const char *rp = texpack_lookup(key);
         if (rp && vk_texpack_replace(t, key, rp)) return;
-        if (fi->bpb == 4 && fi->bw == 1) {  // (el volcado, de los datos del juego en filas seguidas)
+        if (fi->bpb == 4 && fi->bw == 1) {  // (the dump, from the game's data in contiguous rows)
             uint8_t *cp = malloc((size_t)wb * 4 * hb);
             if (cp) {
                 for (uint32_t y = 0; y < hb; y++)
@@ -6761,10 +6767,10 @@ static void copy_buffer_to_texture(uint64_t src, const TexRefRec *dst) {
                                                 (uint32_t)level, array ? (uint32_t)rg[2] : 0, array ? nz : 1},
                            .imageOffset = {rg[0], rg[1], array ? 0 : rg[2]},
                            .imageExtent = {(uint32_t)rg[3], (uint32_t)rg[4], array ? 1 : nz}};
-    // (SMRPG) Una textura escalada (a la escala de render: 16:9 con marca de destino) tiene la imagen más pequeña o más
-    // grande que sus datos, que vienen al tamaño del juego: copiados 1:1, las filas se salían y se plegaban (la
-    // miniatura de los guardados - la captura de 1920x1080 subida a una textura escalada a 1280x720 - salía con dos
-    // mitades desplazadas). Se copian a una imagen temporal del tamaño del juego y de ahí, con un blit, a su sitio.
+    // (SMRPG) A scaled texture (at the render scale: 16:9 with the render-target flag) has an image smaller or larger
+    // than its data, which comes at the game's size: copied 1:1, the rows ran over and wrapped around (the save
+    // thumbnail - the 1920x1080 capture uploaded to a texture scaled to 1280x720 - came out as two shifted halves). It
+    // is copied to a temporary image of the game's size and from there, with a blit, to its place.
     float tsx = 1, tsy = 1;
     renderer_texture_scale(t, &tsx, &tsy);
     if ((tsx != 1 || tsy != 1) && level == 0 && !array && nz == 1 && fi->bw == 1 && fi->bh == 1 &&
@@ -6788,7 +6794,7 @@ static void copy_buffer_to_texture(uint64_t src, const TexRefRec *dst) {
                                              {(int32_t)lroundf((rg[0] + rg[3]) * tsx), (int32_t)lroundf((rg[1] + rg[4]) * tsy), 1}}};
             rec_CmdBlitImage(cb, tmp, VK_IMAGE_LAYOUT_GENERAL, b->image, VK_IMAGE_LAYOUT_GENERAL, 1, &bl, VK_FILTER_LINEAR);
             vk_full_barrier(cb);
-            vk_defer_image(tmp, tmem);  // (destruida cuando la entrega acabe)
+            vk_defer_image(tmp, tmem);  // (destroyed when the submission completes)
             return;
         }
     }
@@ -6797,12 +6803,12 @@ static void copy_buffer_to_texture(uint64_t src, const TexRefRec *dst) {
 
 static void copy_texture_to_buffer(const TexRefRec *src, uint64_t dst) {
     NvnTexture *t = (NvnTexture *)(uintptr_t)src->tex;
-    static int logc = -1;  // (SMRPG, diagnóstico) LARECOMP_LOG_COPIES=1: cada lectura de textura a memoria del juego
+    static int logc = -1;  // (SMRPG, diagnostics) LARECOMP_LOG_COPIES=1: every texture readback to game memory
     if (logc < 0) logc = getenv("LARECOMP_LOG_COPIES") != NULL;
     if (logc && t)
-        LOG("[copy] textura %ux%u fmt %#x -> búfer %llx%s\n", t->width, t->height, t->format, (unsigned long long)dst,
-            !dst || dst < HEAP_BASE ? " (fuera del heap: no se copia)" : "");
-    if (!t || !dst || dst < HEAP_BASE || tex_dead(t, "copia textura -> búfer")) return;
+        LOG("[copy] texture %ux%u fmt %#x -> buffer %llx%s\n", t->width, t->height, t->format, (unsigned long long)dst,
+            !dst || dst < HEAP_BASE ? " (outside the heap: not copied)" : "");
+    if (!t || !dst || dst < HEAP_BASE || tex_dead(t, "texture -> buffer copy")) return;
     t = alias_read(t);
     vk_end_pass();
     const FormatInfo *fi;
@@ -6846,7 +6852,7 @@ static void copy_texture_to_buffer(const TexRefRec *src, uint64_t dst) {
     renderer_flush();  // the CPU may read the result right after the fence
     memcpy((void *)(uintptr_t)dst, out.ptr, total);
     if (small_mem) vmaDestroyImage(g_vk.vma, srcimg, small_mem);
-    if (logc && (t->format == 0x25 || t->format == 0x38) && nz == 1 && row == (uint64_t)rg[3] * 4) {  // (lo copiado, en PNG)
+    if (logc && (t->format == 0x25 || t->format == 0x38) && nz == 1 && row == (uint64_t)rg[3] * 4) {  // (what was copied, as PNG)
         static int ncopy;
         char path[96];
         snprintf(path, sizeof path, "build/copy_%02d_%dx%d.png", ncopy++, rg[3], rg[4]);
@@ -6957,7 +6963,8 @@ static bool depth_upsample_draw(VkCommandBuffer cb, TexBackend *s, TexBackend *d
 static void copy_texture(const TexRefRec *src, const TexRefRec *dst, uint64_t flags) {
     snap_reason = "tex2tex"; snapshots_invalidate(NULL);
     NvnTexture *st_ = (NvnTexture *)(uintptr_t)src->tex, *dt = (NvnTexture *)(uintptr_t)dst->tex;
-    if (!st_ || !dt || tex_dead(st_, "copia textura -> textura (origen)") || tex_dead(dt, "copia textura -> textura (destino)")) return;
+    if (!st_ || !dt || tex_dead(st_, "texture -> texture copy (source)") || tex_dead(dt, "texture -> texture copy "
+                                                                                          "(destination)")) return;
     vk_end_pass();
     if (dl_on == 2) renderer_flush();  // (LARECOMP_VK_DEVLOST_TRACE=2: each copy its own submission, waited on)
     gp_mark(vk_cmd(), "copy texture %ux%u -> %ux%u", st_->width, st_->height, dt->width, dt->height);
@@ -7164,10 +7171,10 @@ void vk_convert_nv12(TexBackend *b, const void *nv12, uint32_t w, uint32_t h, ui
          .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .pImageInfo = &ii[1]}};
     rec_UpdateDescriptorSets(2, wr);
     uint32_t rw = w < b->width ? w : b->width, rh = h < b->height ? h : b->height;
-    // (SMRPG) Una textura escalada (a la escala de render: 16:9 con marca de destino, como la del vídeo del título) es
-    // más grande que el vídeo a más de 1x (resolución 2x-8x, supersampling): dibujado a su tamaño, el vídeo ocupaba solo
-    // la esquina y, como la textura dice que su contenido la llena, se veía encogido (a 4x, a un cuarto). Ahora llena toda
-    // la textura (ampliado o reducido) y la textura lo dice: escala de contenido = escala de reserva.
+    // (SMRPG) A scaled texture (at the render scale: 16:9 with the render-target flag, like the title video's) is
+    // larger than the video above 1x (2x-8x resolution, supersampling): drawn at its own size, the video only filled
+    // the corner and, since the texture says its contents fill it, it looked shrunken (at 4x, to a quarter). Now it
+    // fills the whole texture (scaled up or down) and the texture says so: contents scale = allocation scale.
     if (b->scalable) {
         rw = b->width, rh = b->height;
         b->sx = b->ax, b->sy = b->ay;
@@ -7264,9 +7271,9 @@ static void post_layout_init(void) {  // (post passes and depth_upsample_draw: u
     VK_CHECK(vkCreatePipelineLayout(g_vk.dev, &ci, NULL, &post_layout));
 }
 
-// kind: 0 a plain post pass; 1 SMAA edges also writing stencil 1 where they draw, 2 SMAA weights only where the
-// stencil is 1 (g_vk.smaa_stencil; dsfmt: the stencil format)
-// (SMRPG: cfmt, el formato de color de destino - RGBA8 en los pases, el de la cadena HDR en vk_hdr_encode)
+// kind: 0 a plain post pass; 1 SMAA edges also writing stencil 1 where they draw, 2 SMAA weights only where the stencil
+// is 1 (g_vk.smaa_stencil; dsfmt: the stencil format)
+// (SMRPG: cfmt, the target's color format - RGBA8 in the passes, the HDR swapchain's in vk_hdr_encode)
 static VkPipeline post_pipeline_kf(const char *fs, int kind, VkFormat dsfmt, VkFormat cfmt);
 static VkPipeline post_pipeline_kind(const char *fs, int kind, VkFormat dsfmt) {
     return post_pipeline_kf(fs, kind, dsfmt, VK_FORMAT_R8G8B8A8_UNORM);
@@ -7319,8 +7326,8 @@ static VkPipeline post_pipeline_kf(const char *fs, int kind, VkFormat dsfmt, VkF
     return p;
 }
 
-// (SMRPG) HDR10: la ventana SDR (src, gamma sRGB) a PQ en la imagen de la cadena (dst, formato fmt), con los brillos de
-// los ajustes (device.c vk_frame_end). Dentro de nada: abre y cierra su propio renderizado.
+// (SMRPG) HDR10: the SDR window (src, sRGB gamma) to PQ in the swapchain image (dst, format fmt), with the brightness
+// values from the settings (device.c vk_frame_end). Not inside any rendering: it begins and ends its own.
 void vk_hdr_encode(VkCommandBuffer cb, VkImageView src, VkImageView dst, VkFormat fmt, uint32_t w, uint32_t h) {
     VkPipeline pipe = post_pipeline_kf("hdr10.frag", 0, VK_FORMAT_UNDEFINED, fmt);
     VkRenderingAttachmentInfo ca = {.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, .imageView = dst,
@@ -7340,7 +7347,7 @@ void vk_hdr_encode(VkCommandBuffer cb, VkImageView src, VkImageView dst, VkForma
     VkRect2D sc = {{0, 0}, {w, h}};
     rec_CmdSetViewport(cb, 0, 1, &vp);
     rec_CmdSetScissor(cb, 0, 1, &sc);
-    // a.x brillo del blanco de papel (nits), a.y pico (nits), a.z realce de las luces (0..1)
+    // a.x paper white brightness (nits), a.y peak (nits), a.z highlight boost (0..1)
     float pc[8] = {(float)g_settings.hdr_paper, (float)g_settings.hdr_peak, (float)g_settings.hdr_boost / 10.0f, 0, 0, 0, 0, 0};
     rec_CmdPushConstants(cb, post_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, 32, pc);
     fullscreen_vertex_bind(cb);
@@ -7349,9 +7356,9 @@ void vk_hdr_encode(VkCommandBuffer cb, VkImageView src, VkImageView dst, VkForma
     ss_forget();
 }
 
-// Post image `i` at w x h (RGBA8, kept until the size changes). 0, 1: SMAA edges / weights, 2: SMAA output,
-// 3, 4: FSR EASU / RCAS; (SMRPG) 5: la reducción con filtro de caja, 6: RCAS sin cambio de escala, 7: la copia de la LUT
-// de etalonaje para «Negro puro» (lut_black_fix: destino de una copia, de ahí TRANSFER_DST).
+// Post image `i` at w x h (RGBA8, kept until the size changes). 0, 1: SMAA edges / weights, 2: SMAA output, 3, 4: FSR
+// EASU / RCAS; (SMRPG) 5: the box-filter downscale, 6: RCAS without scaling, 7: the copy of the color grading LUT for
+// "True black" (lut_black_fix: a copy destination, hence TRANSFER_DST).
 static TexBackend *post_image(int i, uint32_t w, uint32_t h) {
     static TexBackend img[8];
     TexBackend *d = &img[i];
@@ -7381,20 +7388,20 @@ static VkImageView post_view(TexBackend *d) {
     return vk_image_view(d, VK_IMAGE_VIEW_TYPE_2D, d->format, 0, 1, 0, 1, id, VK_IMAGE_ASPECT_COLOR_BIT);
 }
 
-// (SMRPG) «Negro puro» (Menú > Vídeo > Imagen). El posproceso de URP etalona la escena con una LUT de color: una tira de
-// 32 cortes de 32x32 en RGBA8 (1024x32; texel (r + 32 b, g) = el color lineal que sale para (r, g, b) / 31), que la pasada
-// ColorGradingLut dibuja en cada fotograma y UberPost lee con el color de la escena. La del juego lleva el negro a
-// (1, 1, 0) / 255 lineal: lo que no tiene nada delante (la pantalla de carga, los lados de los vídeos en 21:9, la escena
-// antes de un fundido) sale (13, 13, 0) en sRGB, un velo oliva que en una pantalla OLED o en HDR se ve (medido: pasadas
-// del fotograma 1100 de la ruta de prueba, la 000 es la LUT y la 005 el posproceso de la escena vacía). Al acabar esa
-// pasada, la LUT se rehace con su negro a 0: (c - n) / (1 - n), n = su texel (0, 0), el del negro; lo demás apenas cambia
-// (x1,004 con n = 1/255). Solo se quita un velo pequeño: del todo hasta 2/255 y cada vez menos hasta 6/255
-// (lutblack.frag); un negro más alto es a propósito (sombras teñidas, un fundido o un destello hechos con el etalonaje) y
-// se deja. La interfaz y los vídeos no pasan por la LUT: no cambian.
-// Solo tras un dibujo de verdad de la LUT: la pasada de un solo destino con su forma (RGBA8 sin escalar, 1024x32 o
-// 256x16 / 4096x64) cuyo último dibujo fue con el sombreador LutBuilderLdr de URP 12 de este juego (su huella,
-// medida en el volcado de pasadas). Un borrado (ClearTexture), otra textura con la misma forma o un dibujo que no llegó
-// a hacerse no se tocan; otro sombreador sobre un destino así sale una vez en el registro.
+// (SMRPG) "True black" (Menu > Video > Image). URP's post-processing grades the scene with a color LUT: a strip of 32
+// slices of 32x32 in RGBA8 (1024x32; texel (r + 32 b, g) = the linear color that comes out for (r, g, b) / 31), which
+// the ColorGradingLut pass draws every frame and UberPost reads with the scene color. The game's takes black to (1, 1,
+// 0) / 255 linear: whatever has nothing in front of it (the loading screen, the sides of the movies at 21:9, the scene
+// before a fade) comes out (13, 13, 0) in sRGB, an olive veil that shows on an OLED screen or in HDR (measured: passes
+// of frame 1100 of the test route, 000 is the LUT and 005 the post-processing of the empty scene). When that pass ends,
+// the LUT is rebuilt with its black at 0: (c - n) / (1 - n), n = its texel (0, 0), the one for black; the rest barely
+// changes (x1.004 with n = 1/255). Only a small veil is removed: entirely up to 2/255 and less and less up to 6/255
+// (lutblack.frag); a higher black is deliberate (tinted shadows, a fade or a flash done with the grading) and is left
+// alone. The UI and the movies do not go through the LUT: they do not change.
+// Only after a real draw of the LUT: the single-target pass with its shape (unscaled RGBA8, 1024x32 or 256x16 /
+// 4096x64) whose last draw used this game's URP 12 LutBuilderLdr shader (its hash, measured in the pass dump). A clear
+// (ClearTexture), another texture with the same shape or a draw that never happened are left untouched; another shader
+// on a target like that is logged once.
 #define LUT_BUILDER_FS 0xbfae305cc14874b3ull
 static bool is_grading_lut(const TexBackend *b) {
     return b && b->image && !b->scalable && b->format == VK_FORMAT_R8G8B8A8_UNORM && b->samples <= 1 && b->depth == 1 &&
@@ -7409,17 +7416,17 @@ static void lut_black_fix(NvnTexture *t, uint64_t fs) {
         while (i < 8 && seen[i] && seen[i] != fs) i++;
         if (i < 8 && !seen[i]) {
             seen[i] = fs;
-            LOG("[vk] negro puro: %ux%u con forma de LUT dibujada con otro sombreador (%016llx): sin tocar\n", b->width,
+            LOG("[vk] true black: LUT-shaped %ux%u drawn with another shader (%016llx): left alone\n", b->width,
                 b->height, (unsigned long long)fs);
         }
         return;
     }
     static int logged;
-    if (!logged++) LOG("[vk] negro puro: LUT de etalonaje %ux%u (formato nvn %#x)\n", b->width, b->height, t->format);
-    if (g_debug_frame) LOG("[vk] negro puro: LUT %p corregida\n", (void *)t);
+    if (!logged++) LOG("[vk] true black: color grading LUT %ux%u (nvn format %#x)\n", b->width, b->height, t->format);
+    if (g_debug_frame) LOG("[vk] true black: LUT %p corrected\n", (void *)t);
     VkCommandBuffer cb = vk_cmd();
     TexBackend *tmp = post_image(7, b->width, b->height);
-    vk_full_barrier(cb);  // (lo que dibujó la pasada, antes de copiarlo)
+    vk_full_barrier(cb);  // (what the pass drew, before copying it)
     VkImageCopy rg = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
                       .extent = {b->width, b->height, 1}};
     rec_CmdCopyImage(cb, b->image, VK_IMAGE_LAYOUT_GENERAL, tmp->image, VK_IMAGE_LAYOUT_GENERAL, 1, &rg);
@@ -7445,8 +7452,8 @@ static void lut_black_fix(NvnTexture *t, uint64_t fs) {
     fullscreen_vertex_bind(cb);
     rec_CmdDraw(cb, 3, 1, 0, 0);
     rec_CmdEndRendering(cb);
-    vk_full_barrier(cb);  // (antes de que el posproceso la lea)
-    ss_forget();  // (su propio pipeline, vista y estado: el siguiente dibujo del juego vuelve a ponerlo todo)
+    vk_full_barrier(cb);  // (before the post-processing reads it)
+    ss_forget();  // (its own pipeline, view and state: the game's next draw sets it all again)
 }
 
 // SMAA's lookup textures (runtime/nvn/smaa_data.c): 0 = area (160 x 560 R8G8), 1 = search (64 x 16 R8), uploaded once.
@@ -7673,9 +7680,9 @@ static VkImageView post_process(VkCommandBuffer cb, TexBackend *b, float fx, flo
     if (ow > 16384) ow = 16384;
     if (oh > 16384) oh = 16384;
     uint32_t cw = (uint32_t)lroundf(b->width * fx), ch = (uint32_t)lroundf(b->height * fy);  // (the contents' size)
-    // (SMRPG) una imagen mayor que su sitio en la ventana (supersampling, o 4K en una ventana de 1440p) se reduce con
-    // un filtro de caja (el muestreo bilineal del present solo promedia 2x2: con x8 / x16 quedaba dentado); la nitidez
-    // (RCAS) va a la resolución final, también sin escalado. *upscaled: la vista devuelta es solo el contenido.
+    // (SMRPG) an image larger than its place in the window (supersampling, or 4K in a 1440p window) is downscaled with
+    // a box filter (the present's bilinear sampling only averages 2x2: with x8 / x16 it came out jagged); sharpening
+    // (RCAS) runs at the final resolution, also without upscaling. *upscaled: the returned view is just the contents.
     bool down = cw > ow + 1 || ch > oh + 1;
     bool fsr = !down && g_settings.upscaler == UPSCALE_FSR1 && (ow > cw + 1 || oh > ch + 1);  // (an upscale only)
     bool sharpen = fsr || g_settings.sharpness > 0;
@@ -7704,7 +7711,7 @@ static VkImageView post_process(VkCommandBuffer cb, TexBackend *b, float fx, flo
         post_area_w = post_area_h = 0;
         v = post_view(out);
     }
-    uint32_t iw_ = cw, ih_ = ch;  // (el tamaño del contenido de la imagen actual)
+    uint32_t iw_ = cw, ih_ = ch;  // (the size of the current image's contents)
     if (fsr) {
         float iw = (float)cw, ih = (float)ch;  // (EASU fetches texels of the contents: a larger texture needs no uv scale)
         TexBackend *e = post_image(3, ow, oh);
@@ -7713,7 +7720,7 @@ static VkImageView post_process(VkCommandBuffer cb, TexBackend *b, float fx, flo
         post_pass(cb, "easu.frag", ei, 1, e, pe, false);
         v = post_view(e);
         iw_ = ow, ih_ = oh;
-    } else if (down) {  // (SMRPG) filtro de caja: ceil(escala) muestras por eje, hasta 8
+    } else if (down) {  // (SMRPG) box filter: ceil(scale) samples per axis, up to 8
         TexBackend *d = post_image(5, ow, oh);
         float sx = (float)cw / (float)ow, sy = (float)ch / (float)oh;
         float pd[8] = {(float)cw, (float)ch, (float)ow, (float)oh, fminf(ceilf(sx), 8), fminf(ceilf(sy), 8),
@@ -7723,7 +7730,7 @@ static VkImageView post_process(VkCommandBuffer cb, TexBackend *b, float fx, flo
         v = post_view(d);
         iw_ = ow, ih_ = oh;
     }
-    if (sharpen) {  // AMD RCAS: 0.2 stops con FSR 1 (su valor por defecto); el control: 1 = 1.8 stops .. 10 = 0 (máxima)
+    if (sharpen) {  // AMD RCAS: 0.2 stops with FSR 1 (its default); the control: 1 = 1.8 stops .. 10 = 0 (maximum)
         float stops = g_settings.sharpness > 0 ? 2.0f - 0.2f * (float)g_settings.sharpness : 0.2f;
         TexBackend *r = post_image(fsr ? 4 : 6, iw_, ih_);
         float pr[8] = {exp2f(-stops), 0, 0, 0, (float)iw_, (float)ih_};
@@ -7738,17 +7745,17 @@ static VkImageView post_process(VkCommandBuffer cb, TexBackend *b, float fx, flo
         static int psm = -1, pfs = -1, pdn = -1, psh = -1;
         if (b->width != piw || b->height != pih || ow != pow_ || oh != poh || smaa != psm || fsr != pfs || down != pdn ||
             g_settings.sharpness != psh)
-            LOG("[post] %ux%u (contenido %ux%u)%s%s%s -> %ux%u, nitidez %d\n", b->width, b->height, cw, ch, smaa ? " smaa" : "",
-                fsr ? " fsr1" : "", down ? " reducción" : "", ow, oh, g_settings.sharpness);
+            LOG("[post] %ux%u (content %ux%u)%s%s%s -> %ux%u, sharpness %d\n", b->width, b->height, cw, ch, smaa ? " smaa" : "",
+                fsr ? " fsr1" : "", down ? " downscale" : "", ow, oh, g_settings.sharpness);
         piw = b->width; pih = b->height; pow_ = ow; poh = oh; psm = smaa; pfs = fsr; pdn = down; psh = g_settings.sharpness;
     }
     return v;
 }
 
-// (SMRPG) La primera fila y la última columna de la imagen final del juego salen fundidas con negro (medidas a
-// 1600x900, a 1280x720 y a 1920x1080 nativo): su propia cadena de post deja la última fila/columna de sus búferes
-// sin escribir y su blit final las funde. El «present» replica el borde (vulkan/shaders.c present.frag): la
-// muestra exterior cae en el centro del segundo texel. LARECOMP_NO_EDGE_FIX=1 lo apaga (para comparar).
+// (SMRPG) The first row and the last column of the game's final image come out blended with black (measured at
+// 1600x900, at 1280x720 and at native 1920x1080): its own post chain leaves the last row/column of its buffers
+// unwritten and its final blit blends them in. The "present" replicates the edge (vulkan/shaders.c present.frag): the
+// outer sample lands on the center of the second texel. LARECOMP_NO_EDGE_FIX=1 turns it off (for comparison).
 static float edge_fix_off(void) {
     static int v = -1;
     if (v < 0) v = getenv("LARECOMP_NO_EDGE_FIX") && atoi(getenv("LARECOMP_NO_EDGE_FIX")) != 0;
@@ -7780,7 +7787,7 @@ void vk_present_draw(VkCommandBuffer cb, TexBackend *b, float vx, float vy, floa
     float pc[12];
     memcpy(pc, pv, 32);
     screen_filter_params(pc + 8);
-    pc[9] = edge_fix_off();  // (SMRPG: la réplica del borde, shaders.c present.frag)
+    pc[9] = edge_fix_off();  // (SMRPG: the edge replication, shaders.c present.frag)
     rec_CmdPushConstants(cb, present_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, 48, pc);
     fullscreen_vertex_bind(cb);
     rec_CmdDraw(cb, 3, 1, 0, 0);
@@ -7792,8 +7799,8 @@ void vk_present_draw(VkCommandBuffer cb, TexBackend *b, float vx, float vy, floa
 // Only the part its contents occupy (Dynamic resolution: the top-left part; the rest holds older frames).
 void renderer_save_texture_tex(TexBackend *b, const char *path) {
     if (!b || !b->image || (b->aspect & ~VK_IMAGE_ASPECT_COLOR_BIT)) return;
-    // (SMRPG, depuración del borde oscuro) LARECOMP_SHOT_RAW=2: solo el contenido exacto (sin re-renderizar),
-    // rápido: para volcar los pases de un fotograma de depuración sin codificar 1.900 PNG.
+    // (SMRPG, dark edge debugging) LARECOMP_SHOT_RAW=2: only the exact contents (no re-rendering), fast: to dump a
+    // debug frame's passes without encoding 1,900 PNGs.
     static int rawonly = -1;
     if (rawonly < 0) { const char *e = getenv("LARECOMP_SHOT_RAW"); rawonly = e ? atoi(e) : 0; }
     if (rawonly == 2) {
@@ -7853,7 +7860,7 @@ void renderer_save_texture_tex(TexBackend *b, const char *path) {
     rec_CmdSetScissor(cb, 0, 1, &sc);
     float pv[12] = {renderer_origin_lower_left() && !strstr(path, "window") ? 1.0f : 0.0f, 0, 0, 0, crop[0], crop[1], crop[2], crop[3]};
     if (strstr(path, "frame_")) screen_filter_params(pv + 8);  // (shots of the game image: as shown)
-    pv[9] = edge_fix_off();  // (SMRPG: la réplica del borde, shaders.c present.frag)
+    pv[9] = edge_fix_off();  // (SMRPG: the edge replication, shaders.c present.frag)
     rec_CmdPushConstants(cb, present_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, 48, pv);
     fullscreen_vertex_bind(cb);
     rec_CmdDraw(cb, 3, 1, 0, 0);
@@ -7864,8 +7871,8 @@ void renderer_save_texture_tex(TexBackend *b, const char *path) {
     rec_CmdCopyImageToBuffer(cb, img, VK_IMAGE_LAYOUT_GENERAL, out.buf, 1, &c);
     renderer_flush();
     vk_save_png(path, out.ptr, w, h);
-    // (SMRPG, depuración del borde oscuro) LARECOMP_SHOT_RAW=1: además de la PNG, el contenido EXACTO de la
-    // textura original (copiado en crudo, sin este re-renderizado): los bordes de la PNG frente a los de verdad.
+    // (SMRPG, dark edge debugging) LARECOMP_SHOT_RAW=1: besides the PNG, the EXACT contents of the original texture
+    // (copied raw, without this re-rendering): the PNG's edges against the real ones.
     if (getenv("LARECOMP_SHOT_RAW") && b->image && !(b->aspect & ~VK_IMAGE_ASPECT_COLOR_BIT)) {
         VkSpan ro = vk_readback((uint64_t)b->width * b->height * 4);
         VkBufferImageCopy rc = {.bufferOffset = ro.off, .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
@@ -7917,7 +7924,7 @@ static void exec_list(uint64_t handle, int depth) {
         case CMD_BIND_UNIFORM_BUFFERS:
             for (uint64_t i = 0; i < r->x[2] && r->x[1] + i < 18 && r->x[0] < 6; i++) {
                 memcpy(&st.ubuf[r->x[0]][r->x[1] + i], (uint8_t *)x + i * 16, 16);
-                if (g_debug_frame && getenv("LARECOMP_DEBUG_DATA"))  // (SMRPG, diagnóstico) qué vincula el juego
+                if (g_debug_frame && getenv("LARECOMP_DEBUG_DATA"))  // (SMRPG, diagnostics) what the game binds
                     LOG("[ubind] stage %llu index %llu addr %llx size %llu\n", (unsigned long long)r->x[0],
                         (unsigned long long)(r->x[1] + i), (unsigned long long)st.ubuf[r->x[0]][r->x[1] + i].addr,
                         (unsigned long long)st.ubuf[r->x[0]][r->x[1] + i].size);

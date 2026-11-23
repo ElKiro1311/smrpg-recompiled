@@ -554,7 +554,7 @@ bool plat_onedrive_synced(const char *dir) { (void)dir; return false; }
 // while the game's threads still submitted work.
 void plat_terminate(void) { _exit(0); }
 
-// (SMRPG: solo Windows) runtime/platform.h
+// (SMRPG: Windows only) runtime/platform.h
 bool plat_spawn_self(void) { return false; }
 bool plat_proc_stats(PlatProcStats *s) { memset(s, 0, sizeof *s); return false; }
 bool plat_gpu_usage(double *pct) { *pct = 0; return false; }

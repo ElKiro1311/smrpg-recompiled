@@ -26,8 +26,8 @@
 
 VkG g_vk;
 static SDL_Window *window;
-static uint32_t g_qfam_queues = 1;  // (SMRPG) colas que ofrece la familia gráfica (pick_device)
-int g_fg_pic[4];  // (SMRPG) la imagen del juego en la ventana, del último present: x, y, ancho, alto (vk_fg.cpp)
+static uint32_t g_qfam_queues = 1;  // (SMRPG) queues the graphics family offers (pick_device)
+int g_fg_pic[4];  // (SMRPG) the game image in the window, from the last present: x, y, width, height (vk_fg.cpp)
 
 // The system memory heap a whole-heap import (exec.c host_import) lands in and what it can hold: the largest heap with
 // a host-visible memory type that isn't device-local (all of them device-local: the largest host-visible one), the
@@ -153,8 +153,8 @@ static void create_instance(void) {
     const char *ext[16];
     uint32_t n_ext = 0;
     for (Uint32 i = 0; i < n_sdl && n_ext < 13; i++) ext[n_ext++] = sdl_ext[i];
-    {   // (SMRPG) HDR: el espacio de color HDR10 de la cadena de intercambio (antes de la de depuración: la reserva de
-        // abajo quita la última si la capa de validación no está)
+    {   // (SMRPG) HDR: the swapchain's HDR10 color space (before the debug extension: the fallback below drops the last
+        // one if the validation layer is missing)
         uint32_t ne = 0;
         vkEnumerateInstanceExtensionProperties(NULL, &ne, NULL);
         VkExtensionProperties *ep = calloc(ne ? ne : 1, sizeof *ep);
@@ -312,8 +312,8 @@ void vk_log_memory(const char *why) {
             b[i].statistics.allocationCount);
 }
 
-// (SMRPG) La memoria de vídeo de la tarjeta: lo que usa este proceso y lo que el controlador le deja (sus montones locales,
-// VK_EXT_memory_budget); false sin VMA. Para el medidor del menú (runtime/ui/perf_meter.c).
+// (SMRPG) The GPU's video memory: what this process uses and what the driver lets it have (its local heaps,
+// VK_EXT_memory_budget); false without VMA. For the menu's meter (runtime/ui/perf_meter.c).
 bool vk_vram_budget(uint64_t *usage, uint64_t *budget) {
     *usage = *budget = 0;
     if (!g_vk.vma) return false;
@@ -369,7 +369,7 @@ static void create_device(void) {
     g_fault_ext = fault;
     bool budget = has_ext(ep, ne, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);  // (real per-heap budgets: vk_log_memory)
     if (budget) ext[n_ext++] = VK_EXT_MEMORY_BUDGET_EXTENSION_NAME;
-    g_vk.budget_ext = budget;  // (SMRPG: lo que usa el proceso, para el panel de impacto de la generación LSFG)
+    g_vk.budget_ext = budget;  // (SMRPG: what the process uses, for the LSFG generation's impact panel)
     // pipeline-building features: logged below (issue #92); dynamic vertex input used, the library one only measured
     bool vids_ext = has_ext(ep, ne, VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME);
 #ifdef VK_EXT_graphics_pipeline_library
@@ -393,9 +393,10 @@ static void create_device(void) {
     bool placed_ext = has_ext(ep, ne, VK_EXT_MAP_MEMORY_PLACED_EXTENSION_NAME) && has_ext(ep, ne, VK_KHR_MAP_MEMORY_2_EXTENSION_NAME);
 #endif
 #endif
-    // (SMRPG) AMD FSR (vulkan/vk_fsr.cpp, con sus DLL junto al ejecutable): FSR 4 corre redes neuronales con matrices
-    // cooperativas (FP8 en RDNA 4) y su backend de Vulkan busca funciones de extensiones ya integradas en Vulkan 1.2/1.3
-    // por su nombre con sufijo, que solo existen con la extensión activada. Como en el ejemplo del SDK.
+    // (SMRPG) AMD FSR (vulkan/vk_fsr.cpp, with its DLLs next to the executable): FSR 4 runs neural networks with
+    // cooperative matrices (FP8 on RDNA 4), and its Vulkan backend looks up, by their suffixed names, functions of
+    // extensions already promoted to Vulkan 1.2/1.3, which only exist under those names with the extension enabled. As
+    // in the SDK's sample.
     extern bool vk_fsr_available(void);
     bool fsr = vk_fsr_available(), coop_ext = false, f8_ext = false;
     if (fsr) {
@@ -422,7 +423,7 @@ static void create_device(void) {
     // features the backend relies on (all present on current desktop drivers)
     VkPhysicalDeviceVulkan12Features have12 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
     VkPhysicalDeviceFeatures2 have = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, .pNext = &have12};
-    // (SMRPG, FSR) lo que el SDK de FSR puede usar si el dispositivo lo tiene
+    // (SMRPG, FSR) what the FSR SDK can use if the device has it
     VkPhysicalDeviceVulkan13Features have13 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
     VkPhysicalDeviceVulkan11Features have11 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES};
     VkPhysicalDeviceCooperativeMatrixFeaturesKHR have_coop = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR};
@@ -584,9 +585,9 @@ static void create_device(void) {
     b->robustBufferAccess = h->robustBufferAccess;  // guest shaders index cbufs freely: keep OOB reads harmless
     g_vk.ssbo_chunks = h->fragmentStoresAndAtomics && h->vertexPipelineStoresAndAtomics && h->robustBufferAccess;
     b->shaderClipDistance = h->shaderClipDistance;
-    {   // (SMRPG) la generación de fotogramas de Lossless Scaling (vk_lsfg.c) corre en este dispositivo: sus sombreadores
-        // (de DXBC, con el traductor de DXVK) piden esto, como lo añade la capa de lsfg-vk a los juegos; si la GPU lo
-        // tiene (a los demás sombreadores no les cambia nada)
+    {   // (SMRPG) Lossless Scaling frame generation (vk_lsfg.c) runs on this device: its shaders (from DXBC, through
+        // DXVK's translator) need this, the way the lsfg-vk layer adds it to games; if the GPU has it (nothing changes
+        // for the other shaders)
         b->shaderStorageImageExtendedFormats = h->shaderStorageImageExtendedFormats;
         b->shaderStorageImageReadWithoutFormat = h->shaderStorageImageReadWithoutFormat;
         b->shaderStorageImageWriteWithoutFormat = h->shaderStorageImageWriteWithoutFormat;
@@ -598,7 +599,7 @@ static void create_device(void) {
                              h->shaderStorageImageWriteWithoutFormat && have12.vulkanMemoryModel;
     }
     if (!h->shaderInt64) LOG("[vk] warning: no shaderInt64 (64-bit address math in shaders)\n");
-    // (SMRPG) AMD FSR: lo que su backend puede usar, si el dispositivo lo tiene
+    // (SMRPG) AMD FSR: what its backend can use, if the device has it
     VkPhysicalDeviceCooperativeMatrixFeaturesKHR en_coop = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR};
 #ifdef VK_EXT_shader_float8
     VkPhysicalDeviceShaderFloat8FeaturesEXT en_f8 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT8_FEATURES_EXT};
@@ -625,16 +626,16 @@ static void create_device(void) {
             en_f8.shaderFloat8CooperativeMatrix = have_f8.shaderFloat8CooperativeMatrix;
             en_f8.pNext = f.pNext, f.pNext = &en_f8;
         }
-        LOG("[vk] AMD FSR junto al ejecutable: matrices cooperativas %d, float8 %d (cooperativas %d), float16 %d, "
-            "producto escalar entero %d\n", (int)en_coop.cooperativeMatrix, (int)en_f8.shaderFloat8,
+        LOG("[vk] AMD FSR next to the executable: cooperative matrices %d, float8 %d (cooperative %d), float16 %d, "
+            "integer dot product %d\n", (int)en_coop.cooperativeMatrix, (int)en_f8.shaderFloat8,
             (int)en_f8.shaderFloat8CooperativeMatrix, (int)f12.shaderFloat16, (int)f13.shaderIntegerDotProduct);
 #else
-        LOG("[vk] AMD FSR junto al ejecutable: matrices cooperativas %d, float16 %d (sin VK_EXT_shader_float8 en las "
-            "cabeceras)\n", (int)en_coop.cooperativeMatrix, (int)f12.shaderFloat16);
+        LOG("[vk] AMD FSR next to the executable: cooperative matrices %d, float16 %d (no VK_EXT_shader_float8 in the "
+            "headers)\n", (int)en_coop.cooperativeMatrix, (int)f12.shaderFloat16);
 #endif
     }
-    // (SMRPG) la generación de fotogramas de AMD (vk_fg.cpp) presenta en una segunda cola de la familia gráfica y
-    // adquiere en una tercera (con solo dos, la misma); sin su DLL, una sola cola como siempre
+    // (SMRPG) AMD frame generation (vk_fg.cpp) presents on a second queue of the graphics family and acquires on a
+    // third (with only two, the same one); without its DLL, a single queue as usual
     static const float prio[3] = {1.0f, 1.0f, 1.0f};
     uint32_t nq = vk_fg_queue_count() < g_qfam_queues ? vk_fg_queue_count() : g_qfam_queues;
     if (nq < 1) nq = 1;
@@ -652,8 +653,8 @@ static void create_device(void) {
         }
         vk_fg_queues(g_vk.queue, g_vk.qfam, present, acquire);
         vk_fsr_set_queue(g_vk.queue);
-        if (vk_fg_dll()) LOG("[vk] colas de la familia gráfica: %u de %u (generación de fotogramas de AMD: %s)\n", nq, g_qfam_queues,
-                             nq >= 2 ? "posible" : "sin una segunda cola, no");
+        if (vk_fg_dll()) LOG("[vk] queues in the graphics family: %u of %u (AMD frame generation: %s)\n", nq, g_qfam_queues,
+                             nq >= 2 ? "possible" : "no, there is no second queue");
     }
     if (g_vk.vids) {
         g_vk.set_vertex_input = (PFN_vkCmdSetVertexInputEXT)vkGetDeviceProcAddr(g_vk.dev, "vkCmdSetVertexInputEXT");
@@ -726,15 +727,15 @@ void vk_pipeline_cache_save(void) {
 }
 
 // ================================================================== swapchain
-// (SMRPG) la ventana sin el menú del runtime, para la generación de fotogramas (más abajo, junto a win_image)
+// (SMRPG) the window without the runtime menu, for frame generation (further down, next to win_image)
 typedef struct { VkImage img; VmaAllocation mem; VkImageView view; VkFormat fmt; VkExtent2D ext; } HudImg;
-static HudImg hud_out;  // (en el formato de la cadena)
+static HudImg hud_out;  // (in the swapchain's format)
 static void hud_free(HudImg *h);
 void vk_frame_suspend(void);
 void vk_frame_resume(void);
 
-// (SMRPG) La generación de fotogramas de AMD (vk_fg.cpp): se quiere con el ajuste, AMD FSR como antialiasing, sus DLL y
-// el SDK cargado (vk_fsr_init, una vez); la swapchain de la ventana es entonces la de AMD (create_swapchain).
+// (SMRPG) AMD frame generation (vk_fg.cpp): wanted with the setting on, AMD FSR as anti-aliasing, its DLLs and the SDK
+// loaded (vk_fsr_init, once); the window's swapchain is then AMD's (create_swapchain).
 static bool fg_wanted(void) {
     if (!g_settings.framegen || g_settings.antialias != AA_FSR || !vk_fg_dll()) return false;
     static int sdk = -1;
@@ -742,23 +743,23 @@ static bool fg_wanted(void) {
     return sdk > 0 && vk_fg_usable();
 }
 
-// (SMRPG) La generación de fotogramas de Lossless Scaling (vk_lsfg.c): si se usa, y cuántas imágenes de más en la cadena;
-// y su real pendiente (la presenta un fotograma después), presentada antes de rehacer o soltar la cadena
+// (SMRPG) Lossless Scaling frame generation (vk_lsfg.c): whether it is in use, and how many extra swapchain images; and
+// its pending real frame (it presents it one frame later), presented before the swapchain is recreated or dropped
 bool vk_lsfg_wanted(void);
 uint32_t vk_lsfg_extra_images(void);
 void vk_lsfg_drop_pending(void);
-// (SMRPG, vk_lsfg.c) la frecuencia de la pantalla de la ventana ahora (60 si no se sabe)
+// (SMRPG, vk_lsfg.c) the refresh rate of the window's display now (60 if unknown)
 float vk_display_hz(void) {
     const SDL_DisplayMode *dm = window ? SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(window)) : NULL;
     return dm && dm->refresh_rate > 1 ? dm->refresh_rate : 60.0f;
 }
 static VkPresentModeKHR present_mode(void) {
-    // MAILBOX by default: the game paces itself (vi.c's emulated 60 Hz vsync), and with FIFO every submission
-    // queued behind the one waiting for a window image, so the game's fence waits followed the presentation engine:
-    // a throttled / captured / busy compositor slowed the whole game (4-21 fps with the GPU mostly idle; mailbox:
-    // 60). No tearing. LARECOMP_VK_PRESENT=fifo|immediate|mailbox to choose.
-    // (SMRPG) Con la generación de fotogramas de Lossless Scaling, FIFO: cada imagen (las generadas y la real) un refresco;
-    // en MAILBOX la siguiente sustituiría a la anterior (vk_lsfg.c)
+    // MAILBOX by default: the game paces itself (vi.c's emulated 60 Hz vsync), and with FIFO every submission queued
+    // behind the one waiting for a window image, so the game's fence waits followed the presentation engine: a
+    // throttled / captured / busy compositor slowed the whole game (4-21 fps with the GPU mostly idle; mailbox: 60). No
+    // tearing. LARECOMP_VK_PRESENT=fifo|immediate|mailbox to choose.
+    // (SMRPG) With Lossless Scaling frame generation, FIFO: each image (the generated ones and the real one) gets one
+    // refresh; in MAILBOX the next one would replace the previous one (vk_lsfg.c)
     if (g_vk.sc_lsfg) return VK_PRESENT_MODE_FIFO_KHR;
     const char *e = getenv("LARECOMP_VK_PRESENT");
     VkPresentModeKHR want = !e || !strcmp(e, "mailbox") ? VK_PRESENT_MODE_MAILBOX_KHR
@@ -788,11 +789,12 @@ static void create_swapchain(void) {
     VkSurfaceFormatKHR sf = fmts[0];
     for (uint32_t i = 0; i < nf; i++)
         if (fmts[i].format == VK_FORMAT_B8G8R8A8_UNORM && fmts[i].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) { sf = fmts[i]; break; }
-    if (!g_vk.win_format) g_vk.win_format = sf.format;  // (SMRPG: el formato SDR en que se dibuja la ventana, para siempre)
-    // (SMRPG) HDR10: A2B10G10R10 / A2R10G10B10 con ST2084 (PQ), si se pide y la pantalla lo ofrece (Windows: «Usar HDR»)
+    if (!g_vk.win_format) g_vk.win_format = sf.format;  // (SMRPG: the SDR format the window is drawn in, for good)
+    // (SMRPG) HDR10: A2B10G10R10 / A2R10G10B10 with ST2084 (PQ), if requested and the display offers it (Windows: "Use
+    // HDR")
     g_vk.hdr_wanted = g_settings.hdr;
     bool hdr = false;
-    if (g_settings.hdr && g_vk.hdr_ext) {  // (A2B10G10R10 antes: la generación de fotogramas de AMD no toma el otro)
+    if (g_settings.hdr && g_vk.hdr_ext) {  // (A2B10G10R10 first: AMD frame generation doesn't take the other one)
         for (int pass = 0; pass < 2 && !hdr; pass++)
             for (uint32_t i = 0; i < nf && !hdr; i++)
                 if (fmts[i].colorSpace == VK_COLOR_SPACE_HDR10_ST2084_EXT &&
@@ -801,16 +803,17 @@ static void create_swapchain(void) {
     }
     if (g_settings.hdr && !hdr) {
         static int told;
-        if (!told++) LOG("[vk] HDR pedido, pero la pantalla no ofrece HDR10%s: imagen SDR\n",
-                         g_vk.hdr_ext ? " (activa «Usar HDR» en la configuración de pantalla de Windows)" : " (sin VK_EXT_swapchain_colorspace)");
+        if (!told++) LOG("[vk] HDR requested, but the display offers no HDR10%s: SDR image\n",
+                         g_vk.hdr_ext ? " (turn on \"Use HDR\" in the Windows display settings)" : " (no "
+                                                                                                            "VK_EXT_swapchain_colorspace)");
     }
-    // (SMRPG: con la generación de fotogramas de Lossless Scaling, una imagen más por cada generada —se adquieren
-    // después de la real— y otra por la real, que se presenta un fotograma después: vk_lsfg.c)
+    // (SMRPG: with Lossless Scaling frame generation, one more image per generated frame - acquired after the real one
+    // - and another for the real one, which is presented one frame later: vk_lsfg.c)
     g_vk.sc_lsfg = vk_lsfg_wanted();
     g_vk.sc_lsfg_extra = g_vk.sc_lsfg ? vk_lsfg_extra_images() : 0;
     uint32_t count = caps.minImageCount + 1 + g_vk.sc_lsfg_extra;
     if (caps.maxImageCount && count > caps.maxImageCount) count = caps.maxImageCount;
-    if (count > VK_SC_MAX - 4) count = VK_SC_MAX - 4;  // (sitio en las tablas para las que añada el sistema)
+    if (count > VK_SC_MAX - 4) count = VK_SC_MAX - 4;  // (room in the tables for any the system adds)
     VkSwapchainKHR old = g_vk.swapchain;
     VkSwapchainCreateInfoKHR ci = {
         .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR, .surface = g_vk.surface, .minImageCount = count,
@@ -819,16 +822,16 @@ static void create_swapchain(void) {
         .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE, .preTransform = caps.currentTransform,
         .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR, .presentMode = present_mode(), .clipped = VK_TRUE,
         .oldSwapchain = old};
-    // (las vistas de las imágenes de la anterior, antes de que se vaya; la GPU está parada: recreate_swapchain esperó)
+    // (the previous swapchain's image views, before it goes; the GPU is idle: recreate_swapchain waited)
     for (uint32_t i = 0; i < g_vk.sc_count; i++) vkDestroyImageView(g_vk.dev, g_vk.sc_views[i], NULL);
-    hud_free(&hud_out);  // (SMRPG: la ventana sin el menú, del tamaño y formato de la cadena)
+    hud_free(&hud_out);  // (SMRPG: the window without the menu, in the swapchain's size and format)
     g_vk.sc_count = 0;
-    // (SMRPG) con la generación de fotogramas, la swapchain de AMD (vk_fg.cpp): la misma rehecha en su sitio; de la de
-    // Vulkan a la de AMD, la de Vulkan se va antes (una superficie lleva una sola). Si la de AMD falla, la de Vulkan.
+    // (SMRPG) with frame generation, AMD's swapchain (vk_fg.cpp): the same one recreated in place; going from Vulkan's
+    // to AMD's, Vulkan's goes first (a surface takes only one). If AMD's fails, Vulkan's.
     bool fg = fg_wanted();
     VkResult sr = VK_ERROR_FEATURE_NOT_PRESENT;
     if (vk_fg_active()) {
-        vk_fg_destroy_swapchain(old);  // (solo la anota: se rehace en su sitio, o vk_fg_release la destruye)
+        vk_fg_destroy_swapchain(old);  // (only notes it: it is recreated in place, or vk_fg_release destroys it)
         old = VK_NULL_HANDLE, ci.oldSwapchain = VK_NULL_HANDLE, g_vk.swapchain = VK_NULL_HANDLE;
         if (fg) sr = vk_fg_create_swapchain(&ci, &g_vk.swapchain);
         else vk_fg_release();
@@ -844,15 +847,15 @@ static void create_swapchain(void) {
     static const char *const modes[] = {"immediate", "mailbox", "fifo", "fifo-relaxed"};
     LOG("[vk] swapchain %ux%u, %u images, %s%s\n", ext.width, ext.height, count,
         ci.presentMode < 4 ? modes[ci.presentMode] : "other present mode",
-        vk_fg_active() ? " (la de AMD, con generación de fotogramas)" : "");
+        vk_fg_active() ? " (AMD's, with frame generation)" : "");
     if (old) vkDestroySwapchainKHR(g_vk.dev, old, NULL);
     g_vk.sc_format = sf.format;
     g_vk.sc_extent = ext;
     g_vk.hdr_active = hdr;
-    // (SMRPG) la imagen intermedia del HDR (la ventana se dibuja en ella, en win_format), del tamaño de la cadena
+    // (SMRPG) the intermediate HDR image (the window is drawn into it, in win_format), the size of the swapchain
     if (g_vk.hdr_img && (!hdr || g_vk.hdr_extent.width != ext.width || g_vk.hdr_extent.height != ext.height)) {
         vkDestroyImageView(g_vk.dev, g_vk.hdr_view, NULL);
-        vmaDestroyImage(g_vk.vma, g_vk.hdr_img, g_vk.hdr_mem);  // (la cola está parada: recreate_swapchain esperó)
+        vmaDestroyImage(g_vk.vma, g_vk.hdr_img, g_vk.hdr_mem);  // (the queue is idle: recreate_swapchain waited)
         g_vk.hdr_img = VK_NULL_HANDLE, g_vk.hdr_view = VK_NULL_HANDLE, g_vk.hdr_mem = NULL;
     }
     if (hdr && !g_vk.hdr_img) {
@@ -867,10 +870,10 @@ static void create_swapchain(void) {
                                     .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}};
         VK_CHECK(vkCreateImageView(g_vk.dev, &vc, NULL, &g_vk.hdr_view));
         g_vk.hdr_extent = ext;
-        LOG("[vk] HDR10 (PQ) activo: %s, %ux%u\n", sf.format == VK_FORMAT_A2B10G10R10_UNORM_PACK32 ? "A2B10G10R10" : "A2R10G10B10",
+        LOG("[vk] HDR10 (PQ) active: %s, %ux%u\n", sf.format == VK_FORMAT_A2B10G10R10_UNORM_PACK32 ? "A2B10G10R10" : "A2R10G10B10",
             ext.width, ext.height);
     }
-    g_vk.sc_count = VK_SC_MAX;  // (SMRPG: la cadena puede traer más imágenes de las pedidas: hasta VK_SC_MAX)
+    g_vk.sc_count = VK_SC_MAX;  // (SMRPG: the swapchain may come with more images than requested: up to VK_SC_MAX)
     if (vk_fg_active()) vk_fg_get_images(g_vk.swapchain, &g_vk.sc_count, g_vk.sc_images);
     else vkGetSwapchainImagesKHR(g_vk.dev, g_vk.swapchain, &g_vk.sc_count, g_vk.sc_images);
     for (uint32_t i = 0; i < g_vk.sc_count; i++) {
@@ -883,8 +886,8 @@ static void create_swapchain(void) {
 
 static void recreate_swapchain(void) {
     rec_drain();  // (every queued present and submission made: the queue is idle for the wait)
-    vk_lsfg_drop_pending();  // (SMRPG: la real que la generación de Lossless Scaling dejó para después, en la cadena vieja)
-    vk_fg_wait_presents();  // (SMRPG: y las presentaciones de la swapchain de AMD, que van en su cola desde sus hilos)
+    vk_lsfg_drop_pending();  // (SMRPG: the real frame Lossless Scaling generation left for later, on the old swapchain)
+    vk_fg_wait_presents();  // (SMRPG: and the presents of AMD's swapchain, which go to its queue from its own threads)
     vkDeviceWaitIdle(g_vk.dev);
     create_swapchain();
 }
@@ -932,25 +935,26 @@ static void image_barrier(VkCommandBuffer cb, VkImage img, VkImageLayout from, V
 typedef struct { uint32_t image; VkSemaphore acquired; bool ok, secondary; uint64_t id; } Frame;
 static Frame cur_frame;
 
-// Acquire the next window image and begin rendering into it (cleared to `clear`). Returns false when there is
-// nothing to draw into (minimised window).
-// (SMRPG) para el menú: si el HDR está activo ahora (y si la instancia puede ofrecerlo)
+// Acquire the next window image and begin rendering into it (cleared to `clear`). Returns false when there is nothing
+// to draw into (minimised window).
+// (SMRPG) for the menu: whether HDR is active now (and whether the instance can offer it)
 bool renderer_hdr_state(bool *offered) {
     if (offered) *offered = g_vk.hdr_ext;
     return g_vk.hdr_active;
 }
 
-// (SMRPG) donde se dibuja la ventana: la imagen de la cadena, o con HDR la intermedia (vk_frame_end la codifica)
+// (SMRPG) where the window is drawn: the swapchain image, or with HDR the intermediate one (vk_frame_end encodes it)
 static VkImageView win_view(void) { return g_vk.hdr_active ? g_vk.hdr_view : g_vk.sc_views[cur_frame.image]; }
 static VkImage win_image(void) { return g_vk.hdr_active ? g_vk.hdr_img : g_vk.sc_images[cur_frame.image]; }
 
-// ---- (SMRPG) La ventana sin el menú del runtime, para la generación de fotogramas (vk_fg.cpp, HUDLessColor).
-// Con la generación y el contador de FPS o el cronómetro a la vista, la imagen de la ventana se copia justo antes de que
-// el menú dibuje encima (backend_present_now). AMD la compara con la que se presenta y no interpola lo que cambia: sin
-// ella, el contador se deformaba con el movimiento de la escena en los fotogramas generados. Se queda en GENERAL, como la
-// lee AMD. Solo sin HDR: con HDR (la copia de la imagen intermedia codificada a PQ como la de la cadena) AMD no sacaba el
-// menú de la diferencia y el contador faltaba en los fotogramas generados (parpadeaba); sin ella se interpola con la escena.
-static void hud_free(HudImg *h) {  // (con la GPU parada: create_swapchain)
+// ---- (SMRPG) The window without the runtime menu, for frame generation (vk_fg.cpp, HUDLessColor).
+// With generation on and the FPS counter or the timer showing, the window image is copied right before the menu draws
+// over it (backend_present_now). AMD compares it with the one being presented and doesn't interpolate what differs:
+// without it, the counter warped with the scene's motion in the generated frames. It stays in GENERAL, as AMD reads it.
+// Only without HDR: with HDR (the copy of the intermediate image encoded to PQ like the swapchain's) AMD didn't extract
+// the menu from the difference and the counter was missing from the generated frames (it flickered); without the copy
+// it is interpolated with the scene.
+static void hud_free(HudImg *h) {  // (with the GPU idle: create_swapchain)
     if (h->view) vkDestroyImageView(g_vk.dev, h->view, NULL);
     if (h->img) vmaDestroyImage(g_vk.vma, h->img, h->mem);
     memset(h, 0, sizeof *h);
@@ -971,11 +975,12 @@ static bool hud_make(HudImg *h, VkFormat fmt, VkExtent2D ext) {
     return true;
 }
 bool vk_fg_hudless_wanted(void) {
-    static int off = -1;  // (pruebas) LARECOMP_FG_NOHUD=1: sin ella
+    static int off = -1;  // (tests) LARECOMP_FG_NOHUD=1: without it
     if (off < 0) off = getenv("LARECOMP_FG_NOHUD") && atoi(getenv("LARECOMP_FG_NOHUD")) != 0;
     return !off && vk_fg_active() && !g_vk.hdr_active && (g_settings.show_fps || g_settings.timer);
 }
-// (exec.c, al preparar el fotograma) la imagen sin el menú, que este fotograma llena antes de presentar; vacía si no
+// (exec.c, when preparing the frame) the image without the menu, which this frame fills before presenting; empty
+// otherwise
 FsrImage vk_fg_hudless(void) {
     FsrImage r = {0};
     if (vk_fg_hudless_wanted() && hud_out.img)
@@ -983,7 +988,7 @@ FsrImage vk_fg_hudless(void) {
                        VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT};
     return r;
 }
-static void hud_copy(VkCommandBuffer cb) {  // (antes del menú, con la ventana dibujándose; sin HDR)
+static void hud_copy(VkCommandBuffer cb) {  // (before the menu, with the window being drawn; without HDR)
     VkExtent2D ext = g_vk.sc_extent;
     if (g_vk.hdr_active || !hud_make(&hud_out, g_vk.sc_format, ext)) return;
     HudImg *dst = &hud_out;
@@ -998,7 +1003,7 @@ static void hud_copy(VkCommandBuffer cb) {  // (antes del menú, con la ventana 
     vk_frame_resume();
 }
 
-// (SMRPG) la imagen siguiente de la ventana: de la swapchain de AMD con la generación de fotogramas, si no de Vulkan
+// (SMRPG) the next window image: from AMD's swapchain with frame generation, otherwise from Vulkan's
 static VkResult acquire_image(uint32_t *idx) {
     if (vk_fg_active()) return vk_fg_acquire(g_vk.swapchain, UINT64_MAX, acquire_sem[slot], idx);
     return vkAcquireNextImageKHR(g_vk.dev, g_vk.swapchain, UINT64_MAX, acquire_sem[slot], VK_NULL_HANDLE, idx);
@@ -1015,8 +1020,8 @@ bool vk_frame_begin(const float clear[4]) {
     WAITING(rec_wait_presents(rec_presents_queued()));
     if (rec_present_recreate()) recreate_swapchain();
     if (!g_vk.swapchain || (uint32_t)w != g_vk.sc_extent.width || (uint32_t)h != g_vk.sc_extent.height ||
-        g_vk.hdr_wanted != g_settings.hdr ||  // (SMRPG: el ajuste HDR cambió en el menú)
-        vk_fg_active() != fg_wanted() || vk_fg_rebuild_wanted() ||  // (SMRPG: la generación de fotogramas, puesta o quitada)
+        g_vk.hdr_wanted != g_settings.hdr ||  // (SMRPG: the HDR setting changed in the menu)
+        vk_fg_active() != fg_wanted() || vk_fg_rebuild_wanted() ||  // (SMRPG: frame generation, turned on or off)
         g_vk.sc_lsfg != vk_lsfg_wanted() || (g_vk.sc_lsfg && g_vk.sc_lsfg_extra != vk_lsfg_extra_images()))  // (SMRPG: Lossless Scaling)
         recreate_swapchain();
     if (!g_vk.swapchain) return false;
@@ -1038,7 +1043,7 @@ bool vk_frame_begin(const float clear[4]) {
     cur_frame.secondary = false;
     slot_seq[slot] = vk_pending_seq();
     VkCommandBuffer cb = vk_cmd();
-    // (SMRPG: con HDR la ventana se dibuja en la imagen intermedia; vk_frame_end la codifica en la de la cadena)
+    // (SMRPG: with HDR the window is drawn into the intermediate image; vk_frame_end encodes it into the swapchain's)
     image_barrier(cb, g_vk.hdr_active ? g_vk.hdr_img : g_vk.sc_images[cur_frame.image], VK_IMAGE_LAYOUT_UNDEFINED,
                   VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
     vk_gpu_timer_window_start();  // (the GPU timer: this submission's work starts after that barrier, which waits for the image)
@@ -1192,7 +1197,7 @@ void vk_frame_end(const char *shot_path) {
     rec_CmdEndRendering(cb);
     VkSpan shot = {0};
     if (shot_path) save_window_image(cb, &shot);
-    if (g_vk.hdr_active) {  // (SMRPG) la ventana SDR a HDR10 (PQ) en la imagen de la cadena: exec.c vk_hdr_encode
+    if (g_vk.hdr_active) {  // (SMRPG) the SDR window to HDR10 (PQ) in the swapchain image: exec.c vk_hdr_encode
         extern void vk_hdr_encode(VkCommandBuffer cb, VkImageView src, VkImageView dst, VkFormat fmt, uint32_t w, uint32_t h);
         image_barrier(cb, g_vk.hdr_img, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL);
         image_barrier(cb, g_vk.sc_images[cur_frame.image], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
@@ -1201,12 +1206,12 @@ void vk_frame_end(const char *shot_path) {
     uint32_t img = cur_frame.image;
     if (!done_sem[img]) done_sem[img] = binary_semaphore();
     uint64_t seq = vk_pending_seq();
-    // (SMRPG) la generación de fotogramas de Lossless Scaling (vk_lsfg.c): copia la ventana a su entrada, envía el
-    // fotograma y encola la generación y las presentaciones (las generadas y esta); si no está en marcha, lo de siempre
+    // (SMRPG) Lossless Scaling frame generation (vk_lsfg.c): copies the window to its input, submits the frame and
+    // queues the generation and the presents (the generated frames and this one); if it isn't running, the usual path
     extern bool vk_lsfg_frame_end(VkCommandBuffer cb, uint32_t img, VkSemaphore acquired, VkSemaphore done);
     if (g_vk.hdr_active || !vk_lsfg_frame_end(cb, img, cur_frame.acquired, done_sem[img])) {
         image_barrier(cb, g_vk.sc_images[img], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
-        if (vk_fg_active()) {  // (SMRPG) un fotograma que no llegó a FSR: sin generación (vk_fg.cpp)
+        if (vk_fg_active()) {  // (SMRPG) a frame that didn't reach FSR: no generation (vk_fg.cpp)
             static const int none = 0;
             rec_CmdCallback(cb, vk_fg_frame_end_record, &none, sizeof none);
         }
@@ -1351,7 +1356,7 @@ void backend_present_now(NvnTexture *t, uint64_t frame) {
         extern void widescreen_present_crop(uint64_t, double, float *, double *, double *, double *, double *);
         float crop[4];  // uv origin and size
         widescreen_present_crop(frame, shape, crop, &vx, &vy, &vw, &vh);
-        {   // (SMRPG) dónde queda la imagen del juego en la ventana: la generación de fotogramas genera solo ahí (exec.c)
+        {   // (SMRPG) where the game image ends up in the window: frame generation only generates there (exec.c)
             extern int g_fg_pic[4];
             g_fg_pic[0] = (int)lround(vx), g_fg_pic[1] = (int)lround(vy), g_fg_pic[2] = (int)lround(vw), g_fg_pic[3] = (int)lround(vh);
         }
@@ -1365,9 +1370,9 @@ void backend_present_now(NvnTexture *t, uint64_t frame) {
         memcpy(g_shot_crop, crop, sizeof crop);
         vk_present_draw(cb, b, (float)vx, (float)vy, (float)vw, (float)vh, pv);
         pp_mark(PP_BLIT);
-        {   // (pruebas) LARECOMP_SET="fotograma:ajuste=valor,..." (también LARECOMP_FG_SET): cambia ajustes de vídeo en esos
-            // fotogramas, como el menú: framegen, fg_version, res_mode (0 igual que la pantalla, 1-8 = Nx...), supersample,
-            // antialias (0 no, 1 SMAA, 2 FSR), fsr_mode
+        {   // (tests) LARECOMP_SET="frame:setting=value,..." (also LARECOMP_FG_SET): changes video settings at those
+            // frames, like the menu: framegen, fg_version, res_mode (0 match display, 1-8 = Nx...), supersample,
+            // antialias (0 none, 1 SMAA, 2 FSR), fsr_mode
             static const char *spec;
             static int read;
             if (!read++) spec = getenv("LARECOMP_SET") ? getenv("LARECOMP_SET") : getenv("LARECOMP_FG_SET");
@@ -1404,7 +1409,7 @@ void backend_present_now(NvnTexture *t, uint64_t frame) {
                     else if (!strcmp(key, "true_black")) g_settings.true_black = val != 0;
                     else if (!strcmp(key, "movie_fit")) g_settings.movie_fit = val != 0;
                     else if (!strcmp(key, "msg")) { extern void am_push_message(uint32_t msg); am_push_message((uint32_t)val); }
-                    LOG("[prueba] %s = %d en el fotograma %ld\n", key, val, at);
+                    LOG("[test] %s = %d on frame %ld\n", key, val, at);
                 }
                 while (*p && *p != ',') p++;
                 if (*p == ',') p++;
@@ -1413,15 +1418,15 @@ void backend_present_now(NvnTexture *t, uint64_t frame) {
         static long menu_at = -1;
         if (menu_at < 0) menu_at = getenv("LARECOMP_MENU_AT") ? atol(getenv("LARECOMP_MENU_AT")) : 0;
         if (menu_at && (long)frame + 1 == menu_at) { extern void menu_test_open(void); menu_test_open(); }
-        if (vk_fg_hudless_wanted()) hud_copy(cb);  // (SMRPG: la ventana sin el menú, para la generación de fotogramas)
+        if (vk_fg_hudless_wanted()) hud_copy(cb);  // (SMRPG: the window without the menu, for frame generation)
         // (ImGui records through vk_overlay_begin / vk_overlay_end, when it draws anything)
         menu_render((void *)cb, g_vk.sc_extent.width, g_vk.sc_extent.height);
         pp_mark(PP_OVERLAY);
         static long win_shot = -1;
         if (win_shot < 0) win_shot = getenv("LARECOMP_WINDOW_SHOT") ? atol(getenv("LARECOMP_WINDOW_SHOT")) : 0;
         bool shot = win_shot && (long)frame + 1 == win_shot;
-        // (SMRPG) también las pruebas que piden la ventana con nombre ("frame:shot:<nombre>" de LARECOMP_INPUT,
-        // runtime/hle/hookshot.c), como en metal.m
+        // (SMRPG) also the tests that ask for a named window shot ("frame:shot:<name>" in LARECOMP_INPUT,
+        // runtime/hle/hookshot.c), as in metal.m
         extern char g_window_shot_request[256];
         static char shot_req[256];
         const char *shot_path = shot ? "build/window.png" : NULL;
@@ -1490,7 +1495,7 @@ void backend_present_now(NvnTexture *t, uint64_t frame) {
         LOG("[hitch] t=%.2f frame %llu gap %.0f ms\n", now, (unsigned long long)frame, (now - prev_present) * 1000);
     prev_present = now;
     pp_mark(PP_REST);  // (the fps line itself is not counted)
-    {   // (SMRPG, LARECOMP_LOG_PERF=1) el medidor del menú en el registro: runtime/perf_meter.c
+    {   // (SMRPG, LARECOMP_LOG_PERF=1) the menu's meter in the log: runtime/perf_meter.c
         extern void perf_meter_log_tick(void);
         perf_meter_log_tick();
     }
@@ -1540,7 +1545,7 @@ static void present_hooks(void) {
 }
 
 void backend_present(NvnTexture *t) {
-    { extern void rt_battle_poll(void); rt_battle_poll(); }  // (SMRPG: ¿sigue el combate? hle/battle_rate.c)
+    { extern void rt_battle_poll(void); rt_battle_poll(); }  // (SMRPG: is the battle still on? hle/battle_rate.c)
     g_last_presented = t;
     uint64_t frame = total_frames, t0 = plat_now_ns();
     if (rq_on()) rq_present(t, frame, true);
@@ -1606,7 +1611,7 @@ void backend_quit(void) {
     rec_quit();  // (what it still had is dropped, not run: no submission or present after this; the queue idle for the wait)
     if (!g_vk.dev) return;
     if (trace) LOG("[vk] quit: waiting for the GPU\n");
-    vk_fg_wait_presents();  // (SMRPG: las presentaciones de la swapchain de AMD en curso)
+    vk_fg_wait_presents();  // (SMRPG: the in-flight presents of AMD's swapchain)
     vkDeviceWaitIdle(g_vk.dev);
     if (trace) LOG("[vk] quit: saving the pipeline cache\n");
     vk_pipeline_cache_save();
@@ -1624,17 +1629,17 @@ static void quick_exit_handler(void) {
 #endif
 }
 
-// (SMRPG) El aspecto de la pantalla de quien juega: el de la ventana, que en cada modo de pantalla es lo que se ve (sin
-// bordes, la del monitor; en pantalla completa, el modo elegido; en ventana, la ventana: LARECOMP_WINDOW=2560x1080 prueba
-// un ultrawide). Lo pide runtime/hle/unity_screen.c cuando Unity elige su resolución, al arrancar (ui_window_init aplica
-// el modo antes), y el menú, para avisar de un aspecto nuevo que se aplicará al volver a abrir. Minimizada: la última.
-double g_test_aspect;  // (pruebas: LARECOMP_SET "aspect=<milésimas>", el aspecto que se da al juego)
+// (SMRPG) The player's screen aspect ratio: the window's, which is what is seen in every display mode (borderless, the
+// monitor's; fullscreen, the chosen mode; windowed, the window: LARECOMP_WINDOW=2560x1080 tests an ultrawide).
+// runtime/hle/unity_screen.c asks for it when Unity picks its resolution, at startup (ui_window_init applies the mode
+// first), and so does the menu, to warn of a new aspect that will apply on the next launch. Minimized: the last one.
+double g_test_aspect;  // (tests: LARECOMP_SET "aspect=<thousandths>", the aspect given to the game)
 double renderer_display_aspect(void) {
     if (g_test_aspect > 0) return g_test_aspect;
     static double last = 16.0 / 9.0;
     int w = 0, h = 0;
-    // (minimizada, o con un tamaño de risa al minimizarse: el aspecto de antes. La pantalla del juego sigue a la
-    // ventana en marcha, runtime/hle/unity_screen.c: con el de una barra de título pedía una pantalla de 6000 de ancho)
+    // (minimized, or with a ridiculous size while minimizing: the previous aspect. The game's screen follows the window
+    // while running, runtime/hle/unity_screen.c: with a title bar's aspect it asked for a screen 6000 wide)
     if (window && !(SDL_GetWindowFlags(window) & SDL_WINDOW_MINIMIZED) && SDL_GetWindowSizeInPixels(window, &w, &h) &&
         w >= 64 && h >= 64)
         last = (double)w / (double)h;
@@ -1663,8 +1668,8 @@ void ui_window_init(void) {
     if (!window) FATAL("SDL_CreateWindow: %s\n", SDL_GetError());
     rt_window_icon(window);
     // the Fullscreen setting applies from the start screen on (not only once the game runs); test windows stay windows
-    {   // (SMRPG) el modo de pantalla (ventana, sin bordes, pantalla completa) y su resolución, antes de que el juego pida
-        // la suya (runtime/ui/menu.mm; las ventanas de prueba no cambian)
+    {   // (SMRPG) the display mode (windowed, borderless, fullscreen) and its resolution, before the game asks for its
+        // own (runtime/ui/menu.mm; test windows don't change)
         extern void menu_apply_window_mode_now(void *win);
         menu_apply_window_mode_now(window);
     }
@@ -1690,7 +1695,7 @@ void backend_reset(void) {
     if (!g_vk.dev) return;
     rq_drain();  // (the render thread: everything queued ran; it idles while the game is down)
     rec_drain();  // (the recorder: everything the render thread queued is recorded and submitted)
-    vk_fg_wait_presents();  // (SMRPG: las presentaciones de la swapchain de AMD en curso)
+    vk_fg_wait_presents();  // (SMRPG: the in-flight presents of AMD's swapchain)
     vkDeviceWaitIdle(g_vk.dev);
     extern void vk_textures_reset(void);
     extern void vk_exec_reset(void);
@@ -1728,7 +1733,7 @@ int ui_run(void) {
             input_handle_event(&e);
         }
         menu_apply_window_requests(window);
-        {   // (SMRPG) la pantalla del juego sigue a la ventana si cambia de aspecto (runtime/hle/unity_screen.c)
+        {   // (SMRPG) the game's screen follows the window if its aspect changes (runtime/hle/unity_screen.c)
             extern void rt_unity_screen_follow(void);
             rt_unity_screen_follow();
         }
